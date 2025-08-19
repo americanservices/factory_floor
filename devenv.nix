@@ -3,6 +3,7 @@
 let
   # Just use plain Python, uv will handle packages
   pythonEnv = pkgs.python3;
+in
 {
   # Language and runtime support
   languages = {
@@ -690,6 +691,48 @@ let
       exec python ${./devflow.py} "$@"
     '';
     
+    # Show help/quick reference
+    "?".exec = ''
+      #!/usr/bin/env bash
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      echo "   🏭 AI Factory Floor - Command Reference"
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      echo ""
+      echo "📚 Worktree Management:"
+      echo "  wt-new <branch> [parent]  - Create new worktree"
+      echo "  wt-list                   - List all worktrees"
+      echo "  wt-cd                     - Interactive worktree switcher"
+      echo "  wt-clean                  - Remove merged worktrees"
+      echo "  wt-stack                  - Show branch stack structure"
+      echo ""
+      echo "🤖 AI Agent Commands:"
+      echo "  agent-start <issue#>      - Create worktree & start agent for issue"
+      echo "  agent-here                - Start agent in current worktree"
+      echo "  agent-status              - Show active AI agents"
+      echo ""
+      echo "🔌 MCP Server Commands:"
+      echo "  mcp-start                 - Start all MCP servers"
+      echo "  mcp-status                - Check MCP server status"
+      echo "  mcp-stop                  - Stop all MCP servers"
+      echo ""
+      echo "📊 Workflow Commands:"
+      echo "  issue-to-pr <issue#>      - Complete workflow from issue to PR"
+      echo "  stack-status              - Show current stack status"
+      echo "  stack-test                - Test stack integration"
+      echo ""
+      echo "🎨 Tools:"
+      echo "  devflow                   - Launch TUI interface"
+      echo "  gt-setup                  - Configure Git Town"
+      echo "  dev-setup                 - Initialize development environment"
+      echo ""
+      echo "💡 Tips:"
+      echo "  • Use '?' anytime to see this help"
+      echo "  • Nested worktrees: 'wt-new child-branch parent-branch'"
+      echo "  • View logs: 'tail -f .mcp/logs/*.log'"
+      echo "  • Set ANTHROPIC_API_KEY for AI features"
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    '';
+    
     # Git Town configuration helper
     gt-setup.exec = ''
       #!/usr/bin/env bash
@@ -738,10 +781,44 @@ let
   #   enable = true;
   # };
 
-  # Process management
+  # Process management - MCP servers run automatically
   processes = {
-    # Optional: Run zellij automatically
-    # zellij.exec = "zellij attach factory-floor || zellij --session factory-floor";
+    # MCP servers as background processes
+    mcp-auto.exec = ''
+      # Create directories if they don't exist
+      mkdir -p .mcp/{pids,logs,sockets}
+      
+      echo "🔌 Starting MCP servers automatically..."
+      
+      # Only start servers that aren't already running
+      start_server() {
+        local name=$1
+        local cmd=$2
+        
+        if [ ! -f ".mcp/pids/$name.pid" ] || ! kill -0 $(cat ".mcp/pids/$name.pid" 2>/dev/null) 2>/dev/null; then
+          echo "  Starting $name..."
+          eval "$cmd > .mcp/logs/$name.log 2>&1 &"
+          echo $! > ".mcp/pids/$name.pid"
+        else
+          echo "  $name already running"
+        fi
+      }
+      
+      # Start each server if not running
+      if command -v npx &> /dev/null; then
+        start_server "context7" "npx -y @upstash/context7-mcp"
+        start_server "sequential" "npx -y @modelcontextprotocol/server-sequential-thinking"
+      fi
+      
+      if command -v deno &> /dev/null; then
+        start_server "python" "deno run -N -R=node_modules -W=node_modules --node-modules-dir=auto jsr:@pydantic/mcp-run-python stdio"
+      fi
+      
+      echo "✅ MCP servers started (check status with 'mcp-status')"
+      
+      # Keep process alive
+      sleep infinity
+    '';
   };
 
   # Shell hook - runs when entering devenv
@@ -751,11 +828,12 @@ let
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     echo "📚 Quick Reference:"
-    echo "  Worktrees:   wt-new, wt-list, wt-cd, wt-clean"
-    echo "  AI Agents:   agent-start, agent-status"
+    echo "  Worktrees:   wt-new, wt-list, wt-cd, wt-clean, wt-stack"
+    echo "  AI Agents:   agent-start, agent-here, agent-status"
     echo "  Workflow:    issue-to-pr <issue#>"
     echo "  MCP:         mcp-start, mcp-status, mcp-stop"
     echo "  Stack:       stack-status, stack-test"
+    echo "  TUI:         devflow"
     echo ""
     echo "💡 Tips:"
     echo "  • Use 'wt-new child parent' for nested worktrees"
