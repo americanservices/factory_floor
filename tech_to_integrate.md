@@ -1,0 +1,11 @@
+https://devenv.sh/integrations/claude-code/#best-practices
+https://github.com/microsoft/playwright-mcp?tab=readme-ov-file
+https://github.com/pydantic/pydantic-ai/tree/main/mcp-run-python
+https://github.com/modelcontextprotocol/servers/blob/main/src/sequentialthinking/README.md
+https://www.anthropic.com/engineering/claude-code-best-practices
+https://docs.anthropic.com/en/docs/claude-code/sdk#using-plan-mode
+https://docs.anthropic.com/en/docs/claude-code/github-actions
+https://github.com/zilliztech/claude-context
+https://github.com/upstash/context7
+https://github.com/BeehiveInnovations/zen-mcp-server?tab=readme-ov-file#3-planner---interactive-step-by-step-planning
+https://docs.anthropic.com/en/docs/claude-code/mcp

@@ -1,0 +1,736 @@
+{ pkgs, lib, config, inputs, ... }:
+
+let
+  # Python environment for future TUI
+  pythonEnv = pkgs.python3;
+in
+{
+  # Language and runtime support
+  languages = {
+    python.enable = true;
+    python.package = pythonEnv;
+    javascript.enable = true;
+    typescript.enable = true;
+    rust.enable = false;  # Enable as needed
+    go.enable = false;    # Enable as needed
+  };
+
+  # Core packages
+  packages = with pkgs; [
+    # Version control
+    git
+    gh
+    
+    # Container tools
+    inputs.dagger.packages.${pkgs.system}.dagger
+    
+    # Terminal tools
+    fzf
+    ripgrep
+    jq
+    tree
+    
+    # AI/MCP tools
+    nodejs_20
+    
+    # Development utilities
+    direnv
+    
+    # Text processing
+    bat
+    fd
+  ];
+
+  # Git hooks configuration
+  pre-commit.hooks = {
+    # Format checking
+    prettier = {
+      enable = true;
+      excludes = [ "*.md" ];
+    };
+    
+    eslint = {
+      enable = false;  # Enable when JS/TS files exist
+      files = "\\.(js|jsx|ts|tsx)$";
+    };
+    
+    black = {
+      enable = false;  # Enable when Python files exist
+      files = "\\.py$";
+    };
+  };
+
+  # Custom scripts for workflow management
+  scripts = {
+    # ============================================
+    # WORKTREE MANAGEMENT
+    # ============================================
+    
+    wt-new.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      if [ $# -lt 1 ]; then
+        echo "Usage: wt-new <branch-name> [parent-branch]"
+        echo "Examples:"
+        echo "  wt-new feat-auth"
+        echo "  wt-new feat-auth-oauth feat-auth"
+        exit 1
+      fi
+      
+      BRANCH="$1"
+      PARENT="''${2:-}"
+      
+      # Ensure we have at least one commit
+      if ! git rev-parse HEAD &>/dev/null; then
+        echo "📝 Creating initial commit..."
+        git add -A || true
+        git commit -m "Initial commit" || true
+      fi
+      
+      # Determine base directory
+      if [ -n "$PARENT" ] && [ -d "worktrees/$PARENT" ]; then
+        # Nested worktree under parent
+        WORKTREE_DIR="worktrees/$PARENT/$BRANCH"
+        BASE_BRANCH="$PARENT"
+      else
+        # Top-level worktree
+        WORKTREE_DIR="worktrees/$BRANCH"
+        # Use current branch as base if no parent specified
+        BASE_BRANCH="''${PARENT:-$(git branch --show-current || echo master)}"
+      fi
+      
+      # Create the worktree
+      echo "📁 Creating worktree at $WORKTREE_DIR from $BASE_BRANCH..."
+      
+      # Try different approaches based on what's available
+      if git show-ref --verify --quiet "refs/remotes/origin/$BASE_BRANCH"; then
+        git worktree add -b "$BRANCH" "$WORKTREE_DIR" "origin/$BASE_BRANCH"
+      elif git show-ref --verify --quiet "refs/heads/$BASE_BRANCH"; then
+        git worktree add -b "$BRANCH" "$WORKTREE_DIR" "$BASE_BRANCH"
+      else
+        # If base branch doesn't exist, use HEAD
+        git worktree add -b "$BRANCH" "$WORKTREE_DIR" HEAD
+      fi
+      
+      # Set up context directory
+      mkdir -p "$WORKTREE_DIR/.context"
+      echo "# Context for $BRANCH" > "$WORKTREE_DIR/.context/README.md"
+      echo "Created from: $BASE_BRANCH" >> "$WORKTREE_DIR/.context/README.md"
+      echo "Created at: $(date)" >> "$WORKTREE_DIR/.context/README.md"
+      
+      # Copy essential files
+      cp -n CLAUDE.md "$WORKTREE_DIR/" 2>/dev/null || true
+      cp -n .envrc "$WORKTREE_DIR/" 2>/dev/null || true
+      cp -n devenv.nix "$WORKTREE_DIR/" 2>/dev/null || true
+      cp -n devenv.yaml "$WORKTREE_DIR/" 2>/dev/null || true
+      cp -n devenv.lock "$WORKTREE_DIR/" 2>/dev/null || true
+      
+      # Create zellij tab
+      if command -v zellij &> /dev/null; then
+        zellij action new-tab --name "$BRANCH" --cwd "$WORKTREE_DIR" 2>/dev/null || true
+      fi
+      
+      echo "✅ Worktree created at $WORKTREE_DIR"
+      echo "💡 Run: cd $WORKTREE_DIR && devenv shell"
+    '';
+    
+    wt-list.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "📊 Git Worktrees:"
+      echo "=================="
+      git worktree list | while read -r path branch commit; do
+        # Get relative path
+        rel_path=$(realpath --relative-to=. "$path" 2>/dev/null || echo "$path")
+        
+        # Check if it's current directory
+        if [ "$path" = "$(pwd)" ]; then
+          echo "→ $rel_path ($branch) [current]"
+        else
+          echo "  $rel_path ($branch)"
+        fi
+        
+        # Show nested worktrees
+        if [ -d "$path/worktrees" ]; then
+          find "$path/worktrees" -maxdepth 2 -name ".git" -type f 2>/dev/null | while read -r nested; do
+            nested_dir=$(dirname "$nested")
+            nested_branch=$(git -C "$nested_dir" branch --show-current 2>/dev/null || echo "unknown")
+            echo "    └─ $(basename "$nested_dir") ($nested_branch)"
+          done
+        fi
+      done
+    '';
+    
+    wt-cd.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      # Use fzf to select worktree
+      WORKTREE=$(git worktree list | fzf --height=40% --reverse --header="Select worktree:" | awk '{print $1}')
+      
+      if [ -n "$WORKTREE" ]; then
+        echo "📁 Switching to $WORKTREE"
+        cd "$WORKTREE"
+        
+        # If zellij is running, switch to or create tab
+        if [ -n "''${ZELLIJ:-}" ]; then
+          BRANCH=$(git branch --show-current)
+          zellij action go-to-tab-name "$BRANCH" 2>/dev/null || \
+            zellij action new-tab --name "$BRANCH" 2>/dev/null || true
+        fi
+        
+        exec $SHELL
+      fi
+    '';
+    
+    wt-clean.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🧹 Cleaning merged worktrees..."
+      
+      # Get list of merged branches
+      MAIN_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+      
+      git worktree list --porcelain | grep "^worktree" | cut -d' ' -f2 | while read -r worktree; do
+        if [ "$worktree" = "$(pwd)" ]; then
+          continue  # Skip current worktree
+        fi
+        
+        branch=$(git -C "$worktree" rev-parse --abbrev-ref HEAD 2>/dev/null || continue)
+        
+        # Check if branch is merged
+        if git branch -r --merged "$MAIN_BRANCH" 2>/dev/null | grep -q "origin/$branch"; then
+          echo "  Removing merged worktree: $worktree (branch: $branch)"
+          git worktree remove "$worktree" --force
+        fi
+      done
+      
+      echo "✅ Cleanup complete"
+    '';
+    
+    wt-stack.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      # Visualize the stack structure
+      echo "📚 Branch Stack Structure:"
+      echo "=========================="
+      
+      # Function to show tree
+      show_tree() {
+        local dir="$1"
+        local prefix="$2"
+        
+        if [ -d "$dir/worktrees" ]; then
+          for subdir in "$dir/worktrees"/*; do
+            if [ -d "$subdir" ]; then
+              local branch=$(git -C "$subdir" branch --show-current 2>/dev/null || echo "unknown")
+              local status=$(git -C "$subdir" status --porcelain 2>/dev/null | wc -l)
+              
+              echo "$prefix├─ $(basename "$subdir") [$branch] ($status changes)"
+              show_tree "$subdir" "$prefix│  "
+            fi
+          done
+        fi
+      }
+      
+      # Start from main worktree
+      echo "main"
+      show_tree "." ""
+    '';
+    
+    # ============================================
+    # AI AGENT MANAGEMENT
+    # ============================================
+    
+    agent-start.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      ISSUE="''${1:-}"
+      if [ -z "$ISSUE" ]; then
+        echo "Usage: agent-start <issue-number>"
+        exit 1
+      fi
+      
+      # Get issue details
+      echo "📋 Fetching issue #$ISSUE..."
+      ISSUE_TITLE=$(gh issue view "$ISSUE" --json title -q .title)
+      ISSUE_BODY=$(gh issue view "$ISSUE" --json body -q .body)
+      
+      # Create branch name
+      BRANCH="issue-$ISSUE-$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-30)"
+      
+      # Create worktree
+      wt-new "$BRANCH"
+      
+      # Save issue context
+      CONTEXT_DIR="worktrees/$BRANCH/.context"
+      mkdir -p "$CONTEXT_DIR"
+      
+      cat > "$CONTEXT_DIR/issue-$ISSUE.md" << EOF
+      # Issue #$ISSUE: $ISSUE_TITLE
+      
+      ## Description
+      $ISSUE_BODY
+      
+      ## Created
+      $(date)
+      
+      ## Branch
+      $BRANCH
+      EOF
+      
+      # Start container with Claude
+      echo "🤖 Starting AI agent for issue #$ISSUE..."
+      
+      cd "worktrees/$BRANCH"
+      
+      # Run in container via dagger
+      if command -v dagger &> /dev/null; then
+        dagger run \
+          --source .:workspace \
+          --source "$CONTEXT_DIR":/context \
+          claude --continue << EOF
+      Read /context/issue-$ISSUE.md and implement the solution.
+      Follow the team workflow in CLAUDE.md.
+      Commit your changes with conventional commits referencing #$ISSUE.
+      EOF
+      else
+        # Fallback to direct execution
+        echo "Note: Running without Dagger container isolation"
+        claude --continue << EOF
+      Read .context/issue-$ISSUE.md and implement the solution.
+      Follow the team workflow in CLAUDE.md.
+      Commit your changes with conventional commits referencing #$ISSUE.
+      EOF
+      fi
+    '';
+    
+    agent-status.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🤖 Active AI Agents:"
+      echo "==================="
+      
+      # Check docker containers
+      if command -v docker &> /dev/null; then
+        docker ps --filter "name=agent-" --format "table {{.Names}}\t{{.Status}}\t{{.RunningFor}}" 2>/dev/null || true
+      fi
+      
+      # Check worktrees with .context directories
+      echo ""
+      echo "📁 Worktrees with Context:"
+      find worktrees -name ".context" -type d 2>/dev/null | while read -r context_dir; do
+        worktree_dir=$(dirname "$context_dir")
+        branch=$(git -C "$worktree_dir" branch --show-current 2>/dev/null || echo "unknown")
+        
+        # Check for issue file
+        issue_file=$(find "$context_dir" -name "issue-*.md" -type f | head -1)
+        if [ -n "$issue_file" ]; then
+          issue_num=$(basename "$issue_file" .md | sed 's/issue-//')
+          echo "  - $worktree_dir (branch: $branch, issue: #$issue_num)"
+        fi
+      done || echo "  No worktrees with context found"
+    '';
+    
+    # ============================================
+    # ISSUE TO PR WORKFLOW
+    # ============================================
+    
+    issue-to-pr.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      ISSUE="''${1:-}"
+      if [ -z "$ISSUE" ]; then
+        echo "Usage: issue-to-pr <issue-number>"
+        echo "This will:"
+        echo "  1. Create a worktree for the issue"
+        echo "  2. Run AI to implement the solution"
+        echo "  3. Run tests"
+        echo "  4. Create a pull request"
+        exit 1
+      fi
+      
+      echo "🚀 Starting issue-to-pr workflow for #$ISSUE"
+      
+      # Start the agent
+      agent-start "$ISSUE"
+      
+      # Get the branch name
+      ISSUE_TITLE=$(gh issue view "$ISSUE" --json title -q .title)
+      BRANCH="issue-$ISSUE-$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-30)"
+      
+      cd "worktrees/$BRANCH"
+      
+      # Run tests
+      echo "🧪 Running tests..."
+      if [ -f "package.json" ]; then
+        npm test || echo "⚠️ Some tests failed"
+      elif [ -f "Cargo.toml" ]; then
+        cargo test || echo "⚠️ Some tests failed"
+      elif [ -f "go.mod" ]; then
+        go test ./... || echo "⚠️ Some tests failed"
+      fi
+      
+      # Create PR if changes exist
+      if [ -n "$(git status --porcelain)" ]; then
+        git add -A
+        git commit -m "feat: implement issue #$ISSUE
+        
+        $(gh issue view "$ISSUE" --json title -q .title)
+        
+        Closes #$ISSUE"
+      fi
+      
+      # Push and create PR
+      echo "📤 Creating pull request..."
+      git push -u origin "$BRANCH"
+      
+      gh pr create \
+        --title "Implement #$ISSUE: $ISSUE_TITLE" \
+        --body "## Description
+        
+        Implements issue #$ISSUE
+        
+        ## Changes
+        - Implementation based on issue requirements
+        - Tests added/updated
+        - Documentation updated
+        
+        ## Testing
+        - [ ] All tests pass
+        - [ ] Manual testing completed
+        
+        Closes #$ISSUE" \
+        --assignee @me
+      
+      echo "✅ Workflow complete! PR created for issue #$ISSUE"
+    '';
+    
+    # ============================================
+    # MCP SERVER MANAGEMENT
+    # ============================================
+    
+    mcp-start.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🔌 Starting MCP servers..."
+      
+      # Create MCP directory for sockets/logs
+      mkdir -p .mcp/{pids,logs,sockets}
+      
+      # Start Context7 (documentation)
+      if command -v npx &> /dev/null; then
+        echo "  Starting Context7..."
+        npx -y @upstash/context7-mcp > .mcp/logs/context7.log 2>&1 &
+        echo $! > .mcp/pids/context7.pid
+      fi
+      
+      # Start Playwright (browser automation)
+      if command -v npx &> /dev/null; then
+        echo "  Starting Playwright..."
+        npx @playwright/mcp@latest --headless > .mcp/logs/playwright.log 2>&1 &
+        echo $! > .mcp/pids/playwright.pid
+      fi
+      
+      # Start Python sandbox
+      if command -v deno &> /dev/null; then
+        echo "  Starting Python sandbox..."
+        deno run \
+          -N -R=node_modules -W=node_modules --node-modules-dir=auto \
+          jsr:@pydantic/mcp-run-python stdio > .mcp/logs/python.log 2>&1 &
+        echo $! > .mcp/pids/python.pid
+      fi
+      
+      # Start Sequential thinking
+      if command -v npx &> /dev/null; then
+        echo "  Starting Sequential thinking..."
+        npx -y @modelcontextprotocol/server-sequential-thinking > .mcp/logs/sequential.log 2>&1 &
+        echo $! > .mcp/pids/sequential.pid
+      fi
+      
+      echo "✅ MCP servers started"
+      echo "📊 View logs: tail -f .mcp/logs/*.log"
+    '';
+    
+    mcp-stop.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🛑 Stopping MCP servers..."
+      
+      if [ -d ".mcp/pids" ]; then
+        for pidfile in .mcp/pids/*.pid; do
+          if [ -f "$pidfile" ]; then
+            PID=$(cat "$pidfile")
+            SERVER=$(basename "$pidfile" .pid)
+            
+            if kill -0 "$PID" 2>/dev/null; then
+              echo "  Stopping $SERVER (PID: $PID)"
+              kill "$PID"
+            fi
+            
+            rm "$pidfile"
+          fi
+        done
+      fi
+      
+      echo "✅ MCP servers stopped"
+    '';
+    
+    mcp-status.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🔌 MCP Server Status:"
+      echo "===================="
+      
+      declare -A servers=(
+        ["context7"]="Context7 (Documentation)"
+        ["playwright"]="Playwright (Browser)"
+        ["python"]="Python Sandbox"
+        ["sequential"]="Sequential Thinking"
+        ["zen"]="Zen Multi-Model"
+      )
+      
+      for server in "''${!servers[@]}"; do
+        if [ -f ".mcp/pids/$server.pid" ]; then
+          PID=$(cat ".mcp/pids/$server.pid")
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "✅ ''${servers[$server]}: Running (PID: $PID)"
+          else
+            echo "❌ ''${servers[$server]}: Stopped (stale PID)"
+          fi
+        else
+          echo "⭕ ''${servers[$server]}: Not started"
+        fi
+      done
+    '';
+    
+    # ============================================
+    # COLLABORATION TOOLS
+    # ============================================
+    
+    stack-status.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "📚 Stack Status:"
+      echo "==============="
+      
+      # Show current branch and its stack
+      CURRENT=$(git branch --show-current)
+      echo "Current: $CURRENT"
+      echo ""
+      
+      # Show parent
+      PARENT=$(git config "branch.$CURRENT.parent" 2>/dev/null || echo "main")
+      echo "Parent: $PARENT"
+      
+      # Show children
+      echo "Children:"
+      git for-each-ref --format='%(refname:short)' refs/heads/ | while read -r branch; do
+        branch_parent=$(git config "branch.$branch.parent" 2>/dev/null || "")
+        if [ "$branch_parent" = "$CURRENT" ]; then
+          echo "  - $branch"
+        fi
+      done
+      
+      # Show modifications
+      echo ""
+      echo "📝 Changes in stack:"
+      git log --oneline "$PARENT..$CURRENT" 2>/dev/null | head -10 || echo "No changes yet"
+    '';
+    
+    stack-test.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🧪 Testing stack integration..."
+      
+      CURRENT=$(git branch --show-current)
+      PARENT=$(git config "branch.$CURRENT.parent" 2>/dev/null || echo "main")
+      
+      # Test against parent
+      echo "Testing against parent ($PARENT)..."
+      git merge-tree $(git merge-base HEAD "$PARENT") HEAD "$PARENT" > /dev/null 2>&1
+      
+      if [ $? -eq 0 ]; then
+        echo "✅ No conflicts with parent"
+      else
+        echo "⚠️ Potential conflicts with parent"
+      fi
+      
+      # Run tests
+      if [ -f "package.json" ]; then
+        npm test
+      elif [ -f "Cargo.toml" ]; then
+        cargo test
+      elif [ -f "go.mod" ]; then
+        go test ./...
+      else
+        echo "No test command found for this project"
+      fi
+    '';
+    
+    # ============================================
+    # UTILITY FUNCTIONS
+    # ============================================
+    
+    dev-setup.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🚀 Setting up development environment..."
+      
+      # Check prerequisites
+      echo "Checking prerequisites..."
+      
+      command -v git >/dev/null 2>&1 || { echo "❌ git not found"; exit 1; }
+      command -v docker >/dev/null 2>&1 || echo "⚠️ docker not found (optional)"
+      command -v zellij >/dev/null 2>&1 || echo "⚠️ zellij not found (optional)"
+      
+      # Initialize git if needed
+      if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "Initializing git repository..."
+        git init
+      fi
+      
+      # Initialize git config
+      echo "Configuring git..."
+      git config alias.wt "worktree" || true
+      git config alias.stack "!stack-status" || true
+      
+      # Create directory structure
+      echo "Creating directory structure..."
+      mkdir -p worktrees
+      mkdir -p .context
+      mkdir -p .mcp/{pids,logs,sockets}
+      
+      # Copy CLAUDE.md if not exists
+      if [ ! -f "CLAUDE.md" ]; then
+        echo "Creating CLAUDE.md..."
+        touch CLAUDE.md
+      fi
+      
+      echo "✅ Development environment ready!"
+      echo ""
+      echo "Quick start:"
+      echo "  1. wt-new <branch>      - Create new worktree"
+      echo "  2. issue-to-pr <#>      - Complete issue workflow"
+      echo "  3. mcp-start            - Start MCP servers"
+      echo "  4. agent-start <#>      - Start AI agent"
+    '';
+    
+    # Git Town configuration helper
+    gt-setup.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🏘️ Configuring Git Town..."
+      
+      # Set main branch
+      git town config main-branch main || true
+      
+      # Set perennial branches
+      git town config perennial-branches "main master develop staging" || true
+      
+      # Enable features
+      git town config sync-before-ship true || true
+      git town config ship-delete-tracking-branch true || true
+      
+      echo "✅ Git Town configured"
+    '';
+  };
+
+  # Environment variables
+  env = {
+    # Workspace configuration
+    WORKTREE_BASE = "worktrees";
+    FACTORY_FLOOR_ROOT = builtins.toString ./.;
+    
+    # MCP configuration  
+    MCP_CONFIG_PATH = ".mcp/config.json";
+    
+    # Zellij configuration
+    ZELLIJ_CONFIG_DIR = ".config/zellij";
+    
+    # Git configuration
+    GIT_TOWN_CONFIG = ".git-town";
+    
+    # AI configuration
+    CLAUDE_CONTEXT_DIR = ".context";
+    
+    # Development
+    EDITOR = "''${EDITOR:-vim}";
+  };
+
+  # Services - commented out for now, using git/filesystem for state
+  # services.postgres = {
+  #   enable = true;
+  # };
+
+  # Process management
+  processes = {
+    # Optional: Run zellij automatically
+    # zellij.exec = "zellij attach factory-floor || zellij --session factory-floor";
+  };
+
+  # Shell hook - runs when entering devenv
+  enterShell = ''
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "   🏭 AI Factory Floor Development Environment"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "📚 Quick Reference:"
+    echo "  Worktrees:   wt-new, wt-list, wt-cd, wt-clean"
+    echo "  AI Agents:   agent-start, agent-status"
+    echo "  Workflow:    issue-to-pr <issue#>"
+    echo "  MCP:         mcp-start, mcp-status, mcp-stop"
+    echo "  Stack:       stack-status, stack-test"
+    echo ""
+    echo "💡 Tips:"
+    echo "  • Use 'wt-new child parent' for nested worktrees"
+    echo "  • Run 'issue-to-pr 123' for complete workflow"
+    echo "  • Check 'CLAUDE.md' for AI instructions"
+    echo ""
+    
+    # Check for required API keys
+    if [ -z "''${ANTHROPIC_API_KEY:-}" ]; then
+      echo "⚠️  Warning: ANTHROPIC_API_KEY not set"
+    fi
+    
+    # Initialize if first run
+    if [ ! -d "worktrees" ]; then
+      echo "🔧 First run detected. Initializing..."
+      dev-setup
+    fi
+    
+    # Show current worktree status
+    if command -v git &> /dev/null && git rev-parse --git-dir > /dev/null 2>&1; then
+      BRANCH=$(git branch --show-current 2>/dev/null || echo "none")
+      echo "📍 Current branch: $BRANCH"
+      
+      # Count worktrees
+      WT_COUNT=$(git worktree list 2>/dev/null | wc -l || echo "0")
+      echo "🌳 Active worktrees: $WT_COUNT"
+    fi
+    
+    echo ""
+    echo "Ready! Run 'wt-new <branch>' to start working."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  '';
+
+  # Testing
+  enterTest = ''
+    echo "Running tests"
+    git --version | grep --color=auto "${pkgs.git.version}"
+  '';
+}
