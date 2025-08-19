@@ -1,11 +1,8 @@
 { pkgs, lib, config, inputs, ... }:
 
 let
-  # Python environment with TUI packages
-  pythonEnv = pkgs.python3.withPackages (ps: with ps; [
-    rich  # For the TUI
-  ]);
-in
+  # Just use plain Python, uv will handle packages
+  pythonEnv = pkgs.python3;
 {
   # Language and runtime support
   languages = {
@@ -35,6 +32,7 @@ in
     
     # AI/MCP tools
     nodejs_20
+    uv  # Fast Python package manager
     
     # Development utilities
     direnv
@@ -296,6 +294,65 @@ in
       Read .context/issue-$ISSUE.md and implement the solution.
       Follow the team workflow in CLAUDE.md.
       Commit your changes with conventional commits referencing #$ISSUE.
+      EOF
+        else
+          echo "⚠️ Claude CLI not found. Please install it or set up MCP servers."
+        fi
+      fi
+    '';
+    
+    # Start agent in current worktree
+    agent-here.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      # Get current branch and worktree
+      CURRENT_BRANCH=$(git branch --show-current)
+      CURRENT_DIR=$(pwd)
+      
+      echo "🤖 Starting AI agent in current worktree: $CURRENT_BRANCH"
+      
+      # Check if we have context
+      if [ -d ".context" ]; then
+        echo "📋 Found existing context"
+        CONTEXT_FILES=$(ls .context/*.md 2>/dev/null || echo "")
+      else
+        mkdir -p .context
+        echo "📝 Creating context for $CURRENT_BRANCH"
+        
+        # Prompt for context
+        echo "What should the AI work on in this worktree?"
+        read -r TASK
+        
+        cat > .context/task.md << EOF
+      # Task for $CURRENT_BRANCH
+      
+      ## Description
+      $TASK
+      
+      ## Created
+      $(date)
+      
+      ## Branch
+      $CURRENT_BRANCH
+      EOF
+      fi
+      
+      # Run in container via dagger if available
+      if command -v dagger &> /dev/null; then
+        echo "🐳 Running AI agent in Dagger container..."
+        dagger call \
+          --source . \
+          dev-container \
+          --context-dir .context \
+          with-exec --args bash,-c,"claude --continue 'Read context in /context/ and work on the task.'"
+      else
+        echo "💻 Running AI agent locally..."
+        if command -v claude &> /dev/null; then
+          claude --continue << EOF
+      Read the context in .context/ and work on the task.
+      Follow the team workflow in CLAUDE.md.
+      The current branch is $CURRENT_BRANCH.
       EOF
         else
           echo "⚠️ Claude CLI not found. Please install it or set up MCP servers."
@@ -625,7 +682,12 @@ in
     # DevFlow TUI
     devflow.exec = ''
       #!/usr/bin/env bash
-      exec ${pythonEnv}/bin/python ${./devflow.py} "$@"
+      # Ensure rich is installed via uv
+      if ! python -c "import rich" 2>/dev/null; then
+        echo "Installing Python dependencies with uv..."
+        uv pip install --system rich 2>/dev/null || true
+      fi
+      exec python ${./devflow.py} "$@"
     '';
     
     # Git Town configuration helper

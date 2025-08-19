@@ -267,6 +267,7 @@ class DevFlowTUI:
             Panel(
                 "[bold]Commands:[/bold] "
                 "[cyan](n)[/cyan]ew worktree | "
+                "[cyan](a)[/cyan]gent start | "
                 "[cyan](s)[/cyan]tart MCP | "
                 "[cyan](k)[/cyan]ill MCP | "
                 "[cyan](r)[/cyan]efresh | "
@@ -281,7 +282,7 @@ class DevFlowTUI:
         """Handle user input"""
         key = Prompt.ask(
             "\n[bold]Command[/bold]",
-            choices=["n", "s", "k", "r", "q"],
+            choices=["n", "a", "s", "k", "r", "q"],
             default="r"
         )
         
@@ -291,6 +292,18 @@ class DevFlowTUI:
             branch = Prompt.ask("[bold]Branch name[/bold]")
             parent = Prompt.ask("[bold]Parent branch (optional)[/bold]", default="")
             self.wt_manager.create_worktree(branch, parent if parent else None)
+        elif key == "a":
+            # Start agent in worktree
+            worktree = Prompt.ask("[bold]Worktree name (or 'here' for current)[/bold]")
+            if worktree == "here":
+                subprocess.run(["devenv", "shell", "--impure", "-c", "agent-here"])
+            else:
+                # Switch to worktree and start agent
+                worktree_path = Path("worktrees") / worktree
+                if worktree_path.exists():
+                    subprocess.run(["devenv", "shell", "--impure", "-c", f"cd {worktree_path} && agent-here"])
+                else:
+                    console.print(f"[red]Worktree {worktree} not found[/red]")
         elif key == "s":
             console.print("[yellow]Starting MCP servers...[/yellow]")
             self.mcp_manager.start_servers()
