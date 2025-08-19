@@ -1,8 +1,10 @@
 { pkgs, lib, config, inputs, ... }:
 
 let
-  # Python environment for future TUI
-  pythonEnv = pkgs.python3;
+  # Python environment with TUI packages
+  pythonEnv = pkgs.python3.withPackages (ps: with ps; [
+    rich  # For the TUI
+  ]);
 in
 {
   # Language and runtime support
@@ -20,6 +22,7 @@ in
     # Version control
     git
     gh
+    git-town
     
     # Container tools
     inputs.dagger.packages.${pkgs.system}.dagger
@@ -277,24 +280,26 @@ in
       
       cd "worktrees/$BRANCH"
       
-      # Run in container via dagger
+      # Run in container via dagger if available
       if command -v dagger &> /dev/null; then
-        dagger run \
-          --source .:workspace \
-          --source "$CONTEXT_DIR":/context \
-          claude --continue << EOF
-      Read /context/issue-$ISSUE.md and implement the solution.
-      Follow the team workflow in CLAUDE.md.
-      Commit your changes with conventional commits referencing #$ISSUE.
-      EOF
+        echo "🐳 Running in Dagger container..."
+        dagger call \
+          --source . \
+          dev-container \
+          --context-dir "$CONTEXT_DIR" \
+          with-exec --args bash,-c,"claude --continue 'Read /context/issue-$ISSUE.md and implement the solution.'"
       else
         # Fallback to direct execution
         echo "Note: Running without Dagger container isolation"
-        claude --continue << EOF
+        if command -v claude &> /dev/null; then
+          claude --continue << EOF
       Read .context/issue-$ISSUE.md and implement the solution.
       Follow the team workflow in CLAUDE.md.
       Commit your changes with conventional commits referencing #$ISSUE.
       EOF
+        else
+          echo "⚠️ Claude CLI not found. Please install it or set up MCP servers."
+        fi
       fi
     '';
     
@@ -615,6 +620,12 @@ in
       echo "  2. issue-to-pr <#>      - Complete issue workflow"
       echo "  3. mcp-start            - Start MCP servers"
       echo "  4. agent-start <#>      - Start AI agent"
+    '';
+    
+    # DevFlow TUI
+    devflow.exec = ''
+      #!/usr/bin/env bash
+      exec ${pythonEnv}/bin/python ${./devflow.py} "$@"
     '';
     
     # Git Town configuration helper

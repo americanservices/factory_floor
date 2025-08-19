@@ -1,0 +1,45 @@
+{
+  "mcpServers": {
+    "context7": {
+      "description": "Documentation fetcher and search",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp"],
+      "transport": "stdio"
+    },
+    "playwright": {
+      "description": "Browser automation for E2E testing",
+      "command": "npx",
+      "args": ["@playwright/mcp@latest", "--headless"],
+      "transport": "stdio"
+    },
+    "zen": {
+      "description": "Multi-model AI collaboration",
+      "command": "uvx",
+      "args": ["zen-mcp-server"],
+      "transport": "stdio",
+      "env": {
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "GEMINI_API_KEY": "${GEMINI_API_KEY}"
+      }
+    },
+    "python-sandbox": {
+      "description": "Safe Python code execution",
+      "command": "deno",
+      "args": [
+        "run",
+        "-N", "-R=node_modules", "-W=node_modules",
+        "--node-modules-dir=auto",
+        "jsr:@pydantic/mcp-run-python",
+        "stdio"
+      ],
+      "transport": "stdio"
+    },
+    "sequential-thinking": {
+      "description": "Structured problem-solving",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "transport": "stdio"
+    }
+  }
+}
