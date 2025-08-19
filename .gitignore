@@ -7,3 +7,15 @@ devenv.local.nix
 
 # pre-commit
 .pre-commit-config.yaml
+
+# Worktrees (managed by git worktree)
+worktrees/
+
+# MCP server data
+.mcp/
+
+# AI context (per-worktree)
+.context/
+
+# Environment variables
+.env

@@ -46,7 +46,7 @@ in
     # Format checking
     prettier = {
       enable = true;
-      excludes = [ "*.md" ];
+      excludes = [ ".*\\.md$" ];
     };
     
     eslint = {
@@ -230,8 +230,8 @@ in
               local branch=$(git -C "$subdir" branch --show-current 2>/dev/null || echo "unknown")
               local status=$(git -C "$subdir" status --porcelain 2>/dev/null | wc -l)
               
-              echo "$prefix├─ $(basename "$subdir") [$branch] ($status changes)"
-              show_tree "$subdir" "$prefix│  "
+              echo "''${prefix}├─ $(basename "$subdir") [$branch] ($status changes)"
+              show_tree "$subdir" "''${prefix}│  "
             fi
           done
         fi
