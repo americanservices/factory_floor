@@ -41,24 +41,12 @@ in
     fd
   ];
 
-  # Git hooks configuration
-  pre-commit.hooks = {
-    # Format checking
-    prettier = {
-      enable = true;
-      excludes = [ ".*\\.md$" ];
-    };
-    
-    eslint = {
-      enable = false;  # Enable when JS/TS files exist
-      files = "\\.(js|jsx|ts|tsx)$";
-    };
-    
-    black = {
-      enable = false;  # Enable when Python files exist
-      files = "\\.py$";
-    };
-  };
+  # Git hooks configuration - disabled for now
+  # pre-commit.hooks = {
+  #   prettier.enable = true;
+  #   eslint.enable = true;
+  #   black.enable = true;
+  # };
 
   # Custom scripts for workflow management
   scripts = {
