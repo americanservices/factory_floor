@@ -683,12 +683,12 @@ in
     # DevFlow TUI
     devflow.exec = ''
       #!/usr/bin/env bash
-      # Ensure rich is installed via uv
-      if ! python -c "import rich" 2>/dev/null; then
-        echo "Installing Python dependencies with uv..."
-        uv pip install --system rich 2>/dev/null || true
+      # Use the venv Python if it exists, otherwise fallback to system
+      if [ -f ".venv/bin/python" ]; then
+        exec .venv/bin/python ${./devflow.py} "$@"
+      else
+        exec python ${./devflow.py} "$@"
       fi
-      exec python ${./devflow.py} "$@"
     '';
     
     # Show help/quick reference
@@ -827,6 +827,20 @@ in
     echo "   🏭 AI Factory Floor Development Environment"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
+    
+    # Set up Python virtual environment with uv
+    if [ ! -d ".venv" ]; then
+      echo "🐍 Creating Python virtual environment..."
+      uv venv .venv
+      echo "📦 Installing Python packages..."
+      source .venv/bin/activate
+      uv pip install rich gitpython aiofiles
+      echo "✅ Python environment ready"
+    else
+      # Just activate if it already exists
+      source .venv/bin/activate
+    fi
+    
     echo "📚 Quick Reference:"
     echo "  Worktrees:   wt-new, wt-list, wt-cd, wt-clean, wt-stack"
     echo "  AI Agents:   agent-start, agent-here, agent-status"
@@ -839,6 +853,7 @@ in
     echo "  • Use 'wt-new child parent' for nested worktrees"
     echo "  • Run 'issue-to-pr 123' for complete workflow"
     echo "  • Check 'CLAUDE.md' for AI instructions"
+    echo "  • Python venv (.venv) is automatically activated"
     echo ""
     
     # Check for required API keys

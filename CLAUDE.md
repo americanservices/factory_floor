@@ -22,6 +22,8 @@ workspace/
 - **Containers**: You may be running inside a Docker container via Dagger for isolation
 - **MCP Servers**: You have access to specialized tools (see MCP section below)
 - **Persistent Context**: Your understanding of issues persists in `.context/` directories
+- **Python Environment**: Automatic `.venv` creation with `uv` on shell entry
+- **Auto-start Services**: MCP servers can start automatically via devenv processes
 
 ## Workflow Patterns
 
@@ -109,20 +111,39 @@ wt-new <branch>          # Create new worktree
 wt-list                  # List all worktrees
 wt-cd                    # Interactive worktree switcher
 wt-clean                 # Remove merged worktrees
+wt-stack                 # Show branch stack structure
 ```
 
 ### AI Agent Commands
 ```bash
-agent-start <issue>      # Start new agent for issue
+agent-start <issue>      # Create worktree & start agent for issue
+agent-here               # Start agent in current worktree
 agent-status             # Show all active agents
-issue-to-pr <number>     # Complete workflow for issue
+issue-to-pr <number>     # Complete workflow from issue to PR
+```
+
+### MCP Server Management
+```bash
+mcp-start                # Start all MCP servers
+mcp-status               # Check server status
+mcp-stop                 # Stop all servers
+```
+
+### Tools & Utilities
+```bash
+devflow                  # Launch Python TUI interface
+?                        # Show comprehensive help/command reference
+stack-status             # Show current stack status
+stack-test               # Test stack integration
+gt-setup                 # Configure Git Town
+dev-setup                # Initialize development environment
 ```
 
 ### Testing & Quality
 ```bash
 devenv test              # Run test suite
-npm run lint             # Check code style
-npm run typecheck        # TypeScript checking
+npm run lint             # Check code style (if configured)
+npm run typecheck        # TypeScript checking (if configured)
 ```
 
 ## Code Standards & Conventions
@@ -244,33 +265,48 @@ Before leaving a worktree:
 3. If in a worktree, it's safe - the damage is isolated
 4. Ask for help to resolve
 
-## Team-Specific Configuration
+## Environment Setup
+
+### Python Virtual Environment
+The devenv automatically creates and activates a Python virtual environment:
+```bash
+# Automatically created on shell entry
+.venv/                   # Python virtual environment with uv
+  ├── bin/              # Python executables
+  └── lib/              # Installed packages (rich, gitpython, aiofiles)
+```
+
+### MCP Servers Configuration
+Available MCP servers (defined in `mcp-servers.json`):
+- **context7**: Documentation fetcher
+- **playwright**: Browser automation
+- **zen**: Multi-model AI collaboration
+- **python-sandbox**: Safe Python execution
+- **sequential-thinking**: Structured problem-solving
+
+### Dagger Pipeline
+Containerization is handled via `dagger_pipeline.py`:
+- AI agents run in isolated Ubuntu containers
+- Worktrees are mounted as volumes
+- Context directories are preserved
+
+### Team-Specific Configuration
 
 ### Project Structure
-[This section should be updated per project]
 ```
-src/
-├── components/     # React components
-├── services/       # API services
-├── utils/          # Utilities
-└── tests/          # Test files
-```
-
-### Available Scripts
-[Update based on package.json]
-```bash
-npm run dev         # Start development server
-npm run build       # Build for production
-npm run test        # Run tests
-npm run lint        # Check code style
-```
-
-### Key Dependencies
-[List main frameworks/libraries the team uses]
-- React 18
-- TypeScript
-- Tailwind CSS
-- Vitest for testing
+factory_floor/
+├── devenv.nix          # Main devenv configuration
+├── CLAUDE.md           # This file - AI instructions
+├── devflow.py          # Python TUI for workflow management
+├── dagger_pipeline.py  # Container configuration
+├── mcp-servers.json    # MCP server definitions
+├── worktrees/          # Git worktrees (gitignored)
+├── .venv/              # Python virtual environment (gitignored)
+├── .mcp/               # MCP server data (gitignored)
+│   ├── logs/          # Server logs
+│   ├── pids/          # Process IDs
+│   └── sockets/       # Communication sockets
+└── .context/           # Per-worktree AI context
 
 ## Quick Reference
 
