@@ -308,8 +308,8 @@ in
         fi
         
         # Use the helper script if it exists, otherwise create inline script
-        if [ -f "$DEVENV_ROOT/run_dagger_agent.py" ]; then
-          python3 "$DEVENV_ROOT/run_dagger_agent.py" \
+        if [ -f "run_dagger_agent.py" ]; then
+          python3 "run_dagger_agent.py" \
             --source . \
             --context .context \
             --issue "$ISSUE"
@@ -426,13 +426,13 @@ PYTHON_SCRIPT
         fi
         
         # Use the helper script if it exists, otherwise create inline script
-        if [ -f "$DEVENV_ROOT/run_dagger_agent.py" ]; then
+        if [ -f "run_dagger_agent.py" ]; then
           if [ -n "$CONTEXT_FILES" ]; then
-            python3 "$DEVENV_ROOT/run_dagger_agent.py" \
+            python3 "run_dagger_agent.py" \
               --source . \
               --context .context
           else
-            python3 "$DEVENV_ROOT/run_dagger_agent.py" \
+            python3 "run_dagger_agent.py" \
               --source . \
               --task "$TASK"
           fi
