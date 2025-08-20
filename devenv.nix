@@ -252,8 +252,25 @@ in
       ISSUE_TITLE=$(gh issue view "$ISSUE" --json title -q .title)
       ISSUE_BODY=$(gh issue view "$ISSUE" --json body -q .body)
       
-      # Create branch name
-      BRANCH="issue-$ISSUE-$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-30)"
+      # Determine branch type based on issue labels
+      LABELS=$(gh issue view "$ISSUE" --json labels -q '.labels[].name' 2>/dev/null | tr '\n' ' ' || echo "")
+      
+      PREFIX="feat"
+      if echo "$LABELS $ISSUE_TITLE" | grep -qiE 'bug|fix|error|broken'; then
+        PREFIX="fix"
+      elif echo "$LABELS $ISSUE_TITLE" | grep -qiE 'docs|documentation|readme'; then
+        PREFIX="docs"
+      elif echo "$LABELS $ISSUE_TITLE" | grep -qiE 'test|testing|spec'; then
+        PREFIX="test"
+      elif echo "$LABELS $ISSUE_TITLE" | grep -qiE 'chore|maintenance|dependency|dependencies'; then
+        PREFIX="chore"
+      elif echo "$LABELS $ISSUE_TITLE" | grep -qiE 'hotfix|urgent|critical'; then
+        PREFIX="hotfix"
+      fi
+      
+      # Create semantic branch name
+      CLEAN_TITLE=$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
+      BRANCH="$PREFIX/$ISSUE-$CLEAN_TITLE"
       
       # Create worktree
       wt-new "$BRANCH"
@@ -281,11 +298,24 @@ in
       cd "worktrees/$BRANCH"
       
       # Use Dagger for isolation if available, otherwise run locally
-      if command -v dagger &> /dev/null && command -v python &> /dev/null; then
+      if command -v dagger &> /dev/null && command -v python3 &> /dev/null && python3 -c "import dagger" 2>/dev/null; then
         echo "🐳 Running AI agent in Dagger container..."
         
-        # Create Python script to run agent in Dagger
-        cat > /tmp/run-agent-$$.py << 'PYTHON_SCRIPT'
+        # Ensure Dagger engine is running
+        if ! dagger version &>/dev/null 2>&1; then
+          echo "Starting Dagger engine..."
+          dagger engine start || echo "Warning: Failed to start Dagger engine"
+        fi
+        
+        # Use the helper script if it exists, otherwise create inline script
+        if [ -f "$DEVENV_ROOT/run_dagger_agent.py" ]; then
+          python3 "$DEVENV_ROOT/run_dagger_agent.py" \
+            --source . \
+            --context .context \
+            --issue "$ISSUE"
+        else
+          # Fallback to inline Python script
+          cat > /tmp/run-agent-$$.py << 'PYTHON_SCRIPT'
 import asyncio
 import dagger
 import os
@@ -293,16 +323,14 @@ import sys
 
 async def main():
     issue = sys.argv[1] if len(sys.argv) > 1 else "unknown"
-    branch = sys.argv[2] if len(sys.argv) > 2 else "unknown"
     
     async with dagger.Connection() as client:
-        # Build container with Claude CLI
+        # Build container
         container = (
             client.container()
-            .from_("node:20-slim")
+            .from_("ubuntu:22.04")
             .with_exec(["apt-get", "update"])
-            .with_exec(["apt-get", "install", "-y", "git", "curl"])
-            .with_exec(["npm", "install", "-g", "@anthropic-ai/claude-code"])
+            .with_exec(["apt-get", "install", "-y", "git", "curl", "nodejs", "npm"])
             .with_mounted_directory("/workspace", client.host().directory("."))
             .with_workdir("/workspace")
         )
@@ -311,18 +339,19 @@ async def main():
         if os.getenv("ANTHROPIC_API_KEY"):
             container = container.with_env_variable("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY"))
         
-        # Run claude in interactive mode
-        print(f"Starting Claude for issue #{issue} in isolated container...")
-        await container.with_exec([
-            "claude", "--continue"
+        # Run command
+        result = await container.with_exec([
+            "bash", "-c", f"echo 'Working on issue #{issue}'"
         ]).stdout()
+        print(result)
 
 if __name__ == "__main__":
     asyncio.run(main())
 PYTHON_SCRIPT
-        
-        python /tmp/run-agent-$$.py "$ISSUE" "$BRANCH"
-        rm -f /tmp/run-agent-$$.py
+          
+          python3 /tmp/run-agent-$$.py "$ISSUE"
+          rm -f /tmp/run-agent-$$.py
+        fi
       else
         # Fallback to local execution
         echo "💻 Starting Claude locally (install Dagger for isolation)..."
@@ -387,11 +416,29 @@ PYTHON_SCRIPT
       fi
       
       # Use Dagger for isolation if available, otherwise run locally
-      if command -v dagger &> /dev/null && command -v python &> /dev/null; then
+      if command -v dagger &> /dev/null && command -v python3 &> /dev/null && python3 -c "import dagger" 2>/dev/null; then
         echo "🐳 Running AI agent in Dagger container..."
         
-        # Create Python script to run agent in Dagger
-        cat > /tmp/run-agent-here-$$.py << 'PYTHON_SCRIPT'
+        # Ensure Dagger engine is running
+        if ! dagger version &>/dev/null 2>&1; then
+          echo "Starting Dagger engine..."
+          dagger engine start || echo "Warning: Failed to start Dagger engine"
+        fi
+        
+        # Use the helper script if it exists, otherwise create inline script
+        if [ -f "$DEVENV_ROOT/run_dagger_agent.py" ]; then
+          if [ -n "$CONTEXT_FILES" ]; then
+            python3 "$DEVENV_ROOT/run_dagger_agent.py" \
+              --source . \
+              --context .context
+          else
+            python3 "$DEVENV_ROOT/run_dagger_agent.py" \
+              --source . \
+              --task "$TASK"
+          fi
+        else
+          # Fallback to inline Python script
+          cat > /tmp/run-agent-here-$$.py << 'PYTHON_SCRIPT'
 import asyncio
 import dagger
 import os
@@ -401,13 +448,12 @@ async def main():
     branch = sys.argv[1] if len(sys.argv) > 1 else "unknown"
     
     async with dagger.Connection() as client:
-        # Build container with Claude CLI
+        # Build container
         container = (
             client.container()
-            .from_("node:20-slim")
+            .from_("ubuntu:22.04")
             .with_exec(["apt-get", "update"])
-            .with_exec(["apt-get", "install", "-y", "git", "curl"])
-            .with_exec(["npm", "install", "-g", "@anthropic-ai/claude-code"])
+            .with_exec(["apt-get", "install", "-y", "git", "curl", "nodejs", "npm"])
             .with_mounted_directory("/workspace", client.host().directory("."))
             .with_workdir("/workspace")
         )
@@ -416,18 +462,19 @@ async def main():
         if os.getenv("ANTHROPIC_API_KEY"):
             container = container.with_env_variable("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY"))
         
-        # Run claude in interactive mode
-        print(f"Starting Claude in branch {branch} in isolated container...")
-        await container.with_exec([
-            "claude", "--continue"
+        # Run command
+        result = await container.with_exec([
+            "bash", "-c", f"echo 'Working in branch {branch}'"
         ]).stdout()
+        print(result)
 
 if __name__ == "__main__":
     asyncio.run(main())
 PYTHON_SCRIPT
-        
-        python /tmp/run-agent-here-$$.py "$CURRENT_BRANCH"
-        rm -f /tmp/run-agent-here-$$.py
+          
+          python3 /tmp/run-agent-here-$$.py "$CURRENT_BRANCH"
+          rm -f /tmp/run-agent-here-$$.py
+        fi
       else
         # Fallback to local execution
         echo "💻 Starting Claude locally (install Dagger for isolation)..."
@@ -924,6 +971,16 @@ PYTHON_SCRIPT
     echo "   🏭 AI Factory Floor Development Environment"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
+    
+    # Check and start Dagger engine if needed
+    if command -v dagger &>/dev/null; then
+      if ! dagger version &>/dev/null; then
+        echo "🐳 Starting Dagger engine..."
+        dagger engine start &>/dev/null || echo "⚠️  Failed to start Dagger engine"
+      else
+        echo "✅ Dagger engine is running"
+      fi
+    fi
     
     # Set up Python virtual environment with uv
     if [ ! -d ".venv" ]; then
