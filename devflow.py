@@ -176,13 +176,12 @@ class DevFlowTUI:
         self.mcp_manager = MCPServerManager()
         self.running = True
         
-    def create_worktree_tree(self) -> Tree:
-        """Create a tree visualization of worktrees"""
-        tree = Tree("🌳 [bold]Worktrees[/bold]")
+    def create_enhanced_worktree_tree(self) -> Tree:
+        """Create an enhanced tree visualization with status indicators"""
+        tree = Tree("")
         worktrees = self.wt_manager.get_worktrees()
         
         # Build tree structure - show all top-level worktrees
-        # Root worktrees are either the main directory or direct children of worktrees/
         root_wts = []
         for wt in worktrees:
             wt_path = Path(wt['path'])
@@ -195,16 +194,51 @@ class DevFlowTUI:
         
         for wt in root_wts:
             branch_name = wt.get('branch', 'detached')
-            issue = f" #{wt['issue']}" if wt.get('issue') else ""
-            current = " [cyan][current][/cyan]" if wt['is_current'] else ""
             
-            node_text = f"{branch_name}{issue}{current}"
+            # Add status indicators
+            status_icon = "🟢" if wt['is_current'] else "⚪"
+            
+            # Check for uncommitted changes
+            try:
+                wt_path = Path(wt['path'])
+                result = subprocess.run(
+                    ['git', '-C', str(wt_path), 'status', '--porcelain'],
+                    capture_output=True, text=True
+                )
+                if result.stdout:
+                    status_icon = "🟡"  # Has uncommitted changes
+            except:
+                pass
+            
+            # Format branch type
+            branch_type = ""
+            if '/' in branch_name:
+                type_prefix = branch_name.split('/')[0]
+                type_colors = {
+                    'feat': 'green',
+                    'fix': 'red',
+                    'docs': 'blue',
+                    'test': 'yellow',
+                    'chore': 'dim'
+                }
+                color = type_colors.get(type_prefix, 'white')
+                branch_type = f"[{color}]{type_prefix}[/{color}]/"
+                branch_name = branch_name[len(type_prefix)+1:]
+            
+            issue = f" [dim]#{wt['issue']}[/dim]" if wt.get('issue') else ""
+            current = " [bold cyan]← you are here[/bold cyan]" if wt['is_current'] else ""
+            
+            node_text = f"{status_icon} {branch_type}{branch_name}{issue}{current}"
             node = tree.add(node_text)
             
             # Add children recursively
             self._add_children_to_tree(node, wt, worktrees)
             
         return tree
+    
+    def create_worktree_tree(self) -> Tree:
+        """Legacy method for compatibility"""
+        return self.create_enhanced_worktree_tree()
     
     def _add_children_to_tree(self, parent_node, parent_wt, all_worktrees):
         """Recursively add children to tree"""
@@ -239,11 +273,12 @@ class DevFlowTUI:
         """Create the main layout"""
         layout = Layout()
         
-        # Split into header and body
+        # Split into header, body, and footer
         layout.split_column(
             Layout(name="header", size=3),
             Layout(name="body"),
-            Layout(name="footer", size=3)
+            Layout(name="workflow", size=8),
+            Layout(name="footer", size=4)
         )
         
         # Header
@@ -261,9 +296,9 @@ class DevFlowTUI:
             Layout(name="right")
         )
         
-        # Left panel - worktree tree
+        # Left panel - worktree tree with status
         layout["body"]["left"].update(
-            Panel(self.create_worktree_tree(), border_style="green")
+            Panel(self.create_enhanced_worktree_tree(), border_style="green", title="🌳 Worktrees")
         )
         
         # Right panel - MCP status
@@ -271,54 +306,118 @@ class DevFlowTUI:
             Panel(self.create_mcp_status_table(), border_style="yellow")
         )
         
-        # Footer - commands
+        # Workflow guide panel
+        layout["workflow"].update(
+            Panel(
+                self.create_workflow_guide(),
+                border_style="cyan",
+                title="📈 Workflow Guide"
+            )
+        )
+        
+        # Footer - enhanced commands
         layout["footer"].update(
             Panel(
-                "[bold]Commands:[/bold] "
-                "[cyan](n)[/cyan]ew worktree | "
-                "[cyan](a)[/cyan]gent start | "
-                "[cyan](s)[/cyan]tart MCP | "
-                "[cyan](k)[/cyan]ill MCP | "
-                "[cyan](r)[/cyan]efresh | "
-                "[cyan](q)[/cyan]uit",
-                border_style="dim"
+                "[bold]🚀 Quick Actions:[/bold]\n"
+                "[cyan](1)[/cyan] Start work on issue → [cyan](2)[/cyan] Sync all branches → "
+                "[cyan](3)[/cyan] Ship current branch\n"
+                "[cyan](n)[/cyan]ew branch | [cyan](s)[/cyan]ync all | [cyan](S)[/cyan]hip | "
+                "[cyan](p)[/cyan]ark | [cyan](a)[/cyan]gent | [cyan](h)[/cyan]elp | [cyan](q)[/cyan]uit",
+                border_style="bright_blue"
             )
         )
         
         return layout
     
+    def create_workflow_guide(self) -> str:
+        """Create workflow guide text"""
+        current_branch = subprocess.run(
+            ['git', 'branch', '--show-current'],
+            capture_output=True, text=True
+        ).stdout.strip()
+        
+        if not current_branch or current_branch in ['main', 'master']:
+            return (
+                "[bold]Ready to start work![/bold]\n\n"
+                "1️⃣  [cyan]Press '1'[/cyan] to start work on an issue (creates semantic branch)\n"
+                "2️⃣  [cyan]Press 'n'[/cyan] to create a new feature branch manually\n"
+                "3️⃣  [cyan]Press 's'[/cyan] to sync all branches with latest changes"
+            )
+        else:
+            # Check if branch has uncommitted changes
+            status = subprocess.run(
+                ['git', 'status', '--porcelain'],
+                capture_output=True, text=True
+            ).stdout
+            
+            if status:
+                return (
+                    f"[yellow]⚠️  Uncommitted changes in {current_branch}[/yellow]\n\n"
+                    "Next steps:\n"
+                    "• Commit your changes: [cyan]git add -A && git commit[/cyan]\n"
+                    "• Then sync: [cyan]Press 's'[/cyan] or run [cyan]git town sync[/cyan]\n"
+                    "• Ready to ship? [cyan]Press 'S'[/cyan] to merge & cleanup"
+                )
+            else:
+                return (
+                    f"[green]✓ Working on: {current_branch}[/green]\n\n"
+                    "Actions available:\n"
+                    "• [cyan]Press 's'[/cyan] - Sync with parent branch\n"
+                    "• [cyan]Press 'S'[/cyan] - Ship (merge to parent & cleanup)\n"
+                    "• [cyan]Press 'p'[/cyan] - Park (pause this branch)\n"
+                    "• [cyan]Press 'a'[/cyan] - Start AI agent here"
+                )
+    
     def handle_input(self) -> bool:
-        """Handle user input"""
+        """Handle user input with enhanced workflow options"""
         key = Prompt.ask(
-            "\n[bold]Command[/bold]",
-            choices=["n", "a", "s", "k", "r", "q"],
+            "\n[bold]Action[/bold]",
+            choices=["1", "2", "3", "n", "s", "S", "p", "a", "h", "q", "r"],
             default="r"
         )
         
         if key == "q":
             return False
+        elif key == "1":
+            # Start work on issue
+            issue = Prompt.ask("[bold]Issue number[/bold]")
+            console.print(f"[green]Starting work on issue #{issue}...[/green]")
+            subprocess.run(["devenv", "shell", "-c", f"agent-start {issue}"])
+        elif key == "2" or key == "s":
+            # Sync all branches
+            console.print("[yellow]Syncing all branches with their parents...[/yellow]")
+            subprocess.run(["devenv", "shell", "-c", "wt-sync-all"])
+        elif key == "3" or key == "S":
+            # Ship current branch
+            console.print("[yellow]Shipping current branch...[/yellow]")
+            subprocess.run(["devenv", "shell", "-c", "wt-ship"])
         elif key == "n":
+            # New branch with semantic naming hint
+            console.print("[dim]Format: <type>/<description>[/dim]")
+            console.print("[dim]Types: feat, fix, docs, test, chore, hotfix[/dim]")
             branch = Prompt.ask("[bold]Branch name[/bold]")
             parent = Prompt.ask("[bold]Parent branch (optional)[/bold]", default="")
             self.wt_manager.create_worktree(branch, parent if parent else None)
+        elif key == "p":
+            # Park current branch
+            console.print("[yellow]Parking current branch...[/yellow]")
+            subprocess.run(["devenv", "shell", "-c", "wt-park"])
         elif key == "a":
-            # Start agent in worktree
-            worktree = Prompt.ask("[bold]Worktree name (or 'here' for current)[/bold]")
-            if worktree == "here":
-                subprocess.run(["devenv", "shell", "--impure", "-c", "agent-here"])
+            # Start agent
+            choice = Prompt.ask(
+                "[bold]Start agent[/bold]",
+                choices=["here", "issue"],
+                default="here"
+            )
+            if choice == "here":
+                subprocess.run(["devenv", "shell", "-c", "agent-here"])
             else:
-                # Switch to worktree and start agent
-                worktree_path = Path("worktrees") / worktree
-                if worktree_path.exists():
-                    subprocess.run(["devenv", "shell", "--impure", "-c", f"cd {worktree_path} && agent-here"])
-                else:
-                    console.print(f"[red]Worktree {worktree} not found[/red]")
-        elif key == "s":
-            console.print("[yellow]Starting MCP servers...[/yellow]")
-            self.mcp_manager.start_servers()
-        elif key == "k":
-            console.print("[yellow]Stopping MCP servers...[/yellow]")
-            self.mcp_manager.stop_servers()
+                issue = Prompt.ask("[bold]Issue number[/bold]")
+                subprocess.run(["devenv", "shell", "-c", f"agent-start {issue}"])
+        elif key == "h":
+            # Show help
+            subprocess.run(["devenv", "shell", "-c", "?"])
+            Prompt.ask("\n[dim]Press Enter to continue[/dim]")
         elif key == "r":
             console.print("[dim]Refreshing...[/dim]")
             

@@ -139,12 +139,150 @@ gt-setup                 # Configure Git Town
 dev-setup                # Initialize development environment
 ```
 
+### Git Town Workflow Commands
+```bash
+wt-sync-all              # Sync all worktrees with their parents
+wt-ship                  # Ship (merge) current branch to parent & cleanup
+wt-park                  # Park branch (pause syncing)
+wt-observe               # Observe branch (pull but don't push)
+wt-contribute            # Mark as contribution branch
+wt-prototype             # Mark as prototype (local-only)
+```
+
 ### Testing & Quality
 ```bash
 devenv test              # Run test suite
 npm run lint             # Check code style (if configured)
 npm run typecheck        # TypeScript checking (if configured)
 ```
+
+## Shipping Workflow
+
+### What "Shipping" Means
+**Shipping** = Merging your feature branch into its parent branch and cleaning up (deleting branch + worktree). It's the final step when work is complete and approved.
+
+### When to Ship vs Create PR
+
+**Use `wt-ship` directly when:**
+- Working solo on small features
+- Parent branch owner has approved
+- Hotfixes needing immediate deployment
+- Company allows direct merging for your role
+
+**Create a PR instead when:**
+- Need code review from team
+- Working on critical/complex features
+- Company policy requires PR approval
+- Want CI/CD checks to run first
+
+### Ship Process Example
+```bash
+# Complete work and ship
+cd worktrees/feat/oauth
+git add -A
+git commit -m "feat: implement OAuth provider #124"
+wt-ship  # Syncs, merges to parent, removes worktree
+
+# OR with PR review
+git push -u origin feat/oauth
+gh pr create --base feat/auth-system
+# After PR approved...
+wt-ship
+```
+
+### Daily Sync Workflow
+```bash
+# Morning: sync all branches
+wt-sync-all
+
+# Start new work
+wt-new feat/new-feature
+cd worktrees/feat/new-feature
+
+# During work: sync regularly
+git town sync
+
+# Ship when complete
+wt-ship
+```
+
+### Branch States
+- **Regular feature**: Standard development branch
+- **Parked** (`wt-park`): Paused, won't sync automatically
+- **Prototype** (`wt-prototype`): Local-only experiments
+- **Observed** (`wt-observe`): Pull updates but don't push
+- **Contribution** (`wt-contribute`): Contributing to someone else's branch
+
+## Local Integration Workflow
+
+### The Multi-Agent Problem
+When multiple AI agents work in parallel, you need to test their combined changes before pushing to remote.
+
+### Solution: Local Sync Commands
+
+**`wt-local-merge`** (run from ANY child worktree)
+- Merges current branch into its parent locally
+- No remote push
+- Good for testing one integration
+
+**`wt-local-sync-all`** (run from ROOT project directory)
+- Merges ALL child branches into their parents
+- No remote push
+- Good for testing complete integration
+
+### Multi-Agent Workflow Example
+
+```bash
+# 1. Start multiple agents in parallel
+agent-start 101  # Creates feat/search
+agent-start 102  # Creates feat/filters  
+agent-start 103  # Creates fix/pagination
+
+# 2. Test local integration
+cd /path/to/project/root
+wt-local-sync-all
+# This merges:
+# - feat/search → main (locally)
+# - feat/filters → main (locally)
+# - fix/pagination → main (locally)
+
+# 3. Test the integrated result
+npm test
+npm run lint
+
+# 4. If tests pass, publish
+git push  # Push main with all integrated changes
+
+# 5. If tests fail, fix and re-sync
+cd worktrees/feat/search
+# fix issues...
+wt-local-merge  # Re-merge just this branch
+cd ../../
+npm test  # Test again
+```
+
+### When to Use Each Command
+
+| Command | Remote Push? | Use When |
+|---------|-------------|----------|
+| `wt-local-merge` | ❌ No | Test one branch integration |
+| `wt-local-sync-all` | ❌ No | Test all branches together |
+| `wt-ship` | ✅ Yes | Ship single branch permanently |
+| `wt-sync-all` | ✅ Yes | Update all from remote |
+
+### Execution Context Guide
+
+**From ROOT project directory:**
+- `wt-local-sync-all` - Integrate all branches
+- `wt-sync-all` - Update from remote
+
+**From ANY child worktree:**
+- `wt-local-merge` - Merge this branch to parent
+- `wt-ship` - Ship this branch to remote
+- `wt-park` - Pause this branch
+- `wt-observe` - Watch this branch
+- `wt-contribute` - Mark as contribution
+- `wt-prototype` - Mark as local-only
 
 ## Code Standards & Conventions
 

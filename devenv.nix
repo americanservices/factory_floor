@@ -264,7 +264,9 @@ in
       #!/usr/bin/env bash
       set -euo pipefail
       
-      echo "🔄 Syncing all worktrees with their parent branches..."
+      echo "🔄 Sync All: Update all worktrees from their parents (with remote push)"
+      echo "📍 Run this from: ROOT of project (main worktree)"
+      echo "💡 This command PULLS from remote and PUSHES changes"
       echo "============================================"
       
       # First sync main
@@ -291,11 +293,190 @@ in
       echo "✅ All worktrees synced!"
     '';
     
+    wt-local-merge.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🔀 Local Merge: Merge current branch into parent (no remote push)"
+      echo "📍 Run this from: ANY worktree (will find parent automatically)"
+      echo "════════════════════════════════════════════════════════════════"
+      
+      # Get current branch
+      BRANCH=$(git branch --show-current)
+      
+      if [ -z "$BRANCH" ]; then
+        echo "❌ Not on a branch"
+        exit 1
+      fi
+      
+      if echo "$BRANCH" | grep -qE '^(main|master|develop|staging|production)$'; then
+        echo "❌ Cannot merge from perennial branch: $BRANCH"
+        echo "💡 This command merges FROM child TO parent"
+        exit 1
+      fi
+      
+      # Get parent branch
+      PARENT=$(git town parent 2>/dev/null || git config "branch.$BRANCH.parent" 2>/dev/null || echo "main")
+      
+      echo "🎯 Current branch: $BRANCH"
+      echo "🎯 Target parent: $PARENT"
+      echo ""
+      
+      # Save current position
+      CURRENT_DIR=$(pwd)
+      
+      # Find parent worktree
+      PARENT_WORKTREE=$(git worktree list | grep "\[$PARENT\]" | awk '{print $1}' | head -1)
+      
+      if [ -z "$PARENT_WORKTREE" ]; then
+        echo "❌ Parent worktree not found for branch: $PARENT"
+        echo "💡 Create parent worktree first: wt-new $PARENT"
+        exit 1
+      fi
+      
+      # Switch to parent worktree and merge
+      echo "📁 Switching to parent worktree: $PARENT_WORKTREE"
+      cd "$PARENT_WORKTREE"
+      
+      # Update parent from origin first
+      echo "🔄 Updating parent from origin..."
+      git fetch origin 2>/dev/null || true
+      git merge origin/$PARENT --ff-only 2>/dev/null || echo "⚠️  Could not fast-forward parent (conflicts may exist)"
+      
+      # Merge child branch
+      echo "🔀 Merging $BRANCH into $PARENT..."
+      if git merge "$BRANCH" --no-ff -m "Local merge: '$BRANCH' → $PARENT
+      
+      This is a LOCAL merge only - no remote push.
+      Run 'git push' when ready to publish."; then
+        echo "✅ Successfully merged $BRANCH into $PARENT"
+        echo "📝 Changes are LOCAL only in worktree: $PARENT_WORKTREE"
+        echo "🚀 To publish: cd $PARENT_WORKTREE && git push"
+      else
+        echo "❌ Merge conflict! Resolve in: $PARENT_WORKTREE"
+        echo "💡 After resolving: git add . && git commit"
+        exit 1
+      fi
+      
+      # Return to original directory
+      cd "$CURRENT_DIR"
+      echo "📍 Returned to: $CURRENT_DIR"
+    '';
+    
+    wt-local-sync-all.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🔄 Local Sync All: Merge all child branches into parents (no remote push)"
+      echo "📍 Run this from: ROOT of project (main worktree)"
+      echo "💡 This command finds ALL worktrees and merges children into parents"
+      echo "════════════════════════════════════════════════════════════════════════"
+      
+      # Check if we're in a git repo
+      if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "❌ Not in a git repository"
+        exit 1
+      fi
+      
+      echo "🔍 Scanning for worktrees and branch relationships..."
+      
+      # Simple approach: find all worktrees and their branches
+      declare -a all_branches=()
+      declare -A branch_to_path=()
+      declare -A branch_parents=()
+      
+      # Get all worktrees
+      while IFS= read -r line; do
+        if [[ $line =~ ^worktree[[:space:]]+(.+) ]]; then
+          path="''${BASH_REMATCH[1]}"
+          # Get branch for this worktree
+          branch=$(git -C "$path" branch --show-current 2>/dev/null || "")
+          if [ -n "$branch" ]; then
+            all_branches+=("$branch")
+            branch_to_path["$branch"]="$path"
+            
+            # Try to get parent
+            parent=$(git -C "$path" town parent 2>/dev/null || git -C "$path" config "branch.$branch.parent" 2>/dev/null || "")
+            if [ -n "$parent" ]; then
+              branch_parents["$branch"]="$parent"
+            fi
+          fi
+        fi
+      done < <(git worktree list --porcelain)
+      
+      echo "📊 Found ''${#all_branches[@]} worktrees:"
+      for branch in "''${all_branches[@]}"; do
+        parent="''${branch_parents[$branch]:-main}"
+        path="''${branch_to_path[$branch]}"
+        echo "  • $branch → $parent (at $path)"
+      done
+      echo ""
+      
+      # Function to merge one branch into its parent
+      merge_single() {
+        local child_branch=$1
+        local child_path="''${branch_to_path[$child_branch]}"
+        local parent_branch="''${branch_parents[$child_branch]:-main}"
+        local parent_path="''${branch_to_path[$parent_branch]:-}"
+        
+        # If parent path is empty, it might be main in root
+        if [ -z "$parent_path" ]; then
+          parent_path=$(git worktree list | grep "\[$parent_branch\]" | awk '{print $1}' | head -1)
+        fi
+        
+        if [ -z "$parent_path" ]; then
+          echo "  ⚠️  Parent worktree not found for $parent_branch (skipping $child_branch)"
+          return
+        fi
+        
+        echo "  🔀 Merging $child_branch → $parent_branch"
+        echo "     From: $child_path"
+        echo "     To:   $parent_path"
+        
+        cd "$parent_path"
+        if git merge "$child_branch" --no-ff -m "Local sync: merge '$child_branch' into $parent_branch
+
+This is a LOCAL merge from wt-local-sync-all.
+No remote push performed."; then
+          echo "     ✅ Merged successfully"
+        else
+          echo "     ❌ Merge conflict! Resolve manually in $parent_path"
+        fi
+      }
+      
+      # Sort branches by dependency (children first)
+      echo "🔀 Starting local merges..."
+      
+      # Simple approach: merge all non-perennial branches
+      for branch in "''${all_branches[@]}"; do
+        if [[ ! "$branch" =~ ^(main|master|develop|staging|production)$ ]]; then
+          merge_single "$branch"
+        fi
+      done
+      
+      echo ""
+      echo "✅ Local sync complete! All changes are LOCAL only."
+      echo "📝 Review integrated changes:"
+      for branch in "''${all_branches[@]}"; do
+        path="''${branch_to_path[$branch]}"
+        echo "     cd $path && git log --oneline -5"
+      done
+      echo ""
+      echo "🚀 To publish changes:"
+      echo "     cd <worktree> && git push"
+      echo "     OR use 'wt-ship' from specific worktrees"
+    '';
+    
     wt-ship.exec = ''
       #!/usr/bin/env bash
       set -euo pipefail
       
-      # Ship current worktree branch
+      echo "🚢 Ship: Merge to parent + push to remote + cleanup worktree"
+      echo "📍 Run this from: ANY child worktree (not main/master)"
+      echo "💡 This PUSHES to remote and deletes the branch permanently"
+      echo "═══════════════════════════════════════════════════════════"
+      
+      # Get current branch
       BRANCH=$(git branch --show-current)
       
       if [ -z "$BRANCH" ]; then
@@ -305,60 +486,110 @@ in
       
       if echo "$BRANCH" | grep -qE '^(main|master|develop|staging|production)$'; then
         echo "❌ Cannot ship perennial branch: $BRANCH"
+        echo "💡 Ship merges FROM child TO parent"
         exit 1
       fi
       
-      echo "🚢 Shipping branch: $BRANCH"
+      echo "🎯 Shipping branch: $BRANCH"
+      echo "⚠️  This will:"
+      echo "   1. Sync with parent"
+      echo "   2. Merge to parent" 
+      echo "   3. Push to remote"
+      echo "   4. Delete branch"
+      echo "   5. Remove worktree"
+      echo ""
+      read -p "Continue? (y/N) " -n 1 -r
+      echo
+      if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "❌ Aborted"
+        exit 1
+      fi
       
       # First sync to get latest changes
+      echo "🔄 Syncing with parent..."
       git town sync
       
       # Then ship the branch
+      echo "🚢 Shipping to remote..."
       git town ship
       
       # Remove the worktree after shipping
       cd ..
       if [[ "$PWD" == */worktrees* ]]; then
         WORKTREE_NAME=$(basename "$OLDPWD")
+        echo "🗑️  Removing worktree: $WORKTREE_NAME"
         git worktree remove "$WORKTREE_NAME" --force
-        echo "🗑️  Removed worktree: $WORKTREE_NAME"
       fi
+      
+      echo "✅ Ship complete! Branch merged and pushed to remote."
     '';
     
     wt-park.exec = ''
       #!/usr/bin/env bash
       set -euo pipefail
       
+      echo "⏸️  Park: Pause syncing for current branch"
+      echo "📍 Run this from: ANY worktree you want to pause"
+      echo "💡 Parked branches are skipped by wt-sync-all"
+      echo "═══════════════════════════════════════════════"
+      
       # Park current branch (stop syncing)
+      BRANCH=$(git branch --show-current)
       git town park
-      echo "⏸️  Branch parked: $(git branch --show-current)"
+      echo "✅ Branch parked: $BRANCH"
+      echo "📝 This branch will be skipped during sync operations"
+      echo "🔄 To resume: cd here && git town hack"
     '';
     
     wt-observe.exec = ''
       #!/usr/bin/env bash
       set -euo pipefail
       
+      echo "👀 Observe: Watch branch (pull updates, don't push)"
+      echo "📍 Run this from: ANY worktree you want to observe"
+      echo "💡 Good for monitoring someone else's branch"
+      echo "══════════════════════════════════════════════════"
+      
       # Observe current branch (sync but don't push)
+      BRANCH=$(git branch --show-current)
       git town observe
-      echo "👀 Branch set to observe mode: $(git branch --show-current)"
+      echo "✅ Branch set to observe mode: $BRANCH"
+      echo "🔄 Will pull updates but won't push your changes"
+      echo "🔄 To resume normal: cd here && git town hack"
     '';
     
     wt-contribute.exec = ''
       #!/usr/bin/env bash
       set -euo pipefail
       
+      echo "🤝 Contribute: Mark as contribution to someone else's branch"
+      echo "📍 Run this from: ANY worktree where you're contributing"
+      echo "💡 Good when adding to another person's feature branch"
+      echo "════════════════════════════════════════════════════════════"
+      
       # Mark as contribution branch
+      BRANCH=$(git branch --show-current)
       git town contribute
-      echo "🤝 Branch marked as contribution: $(git branch --show-current)"
+      echo "✅ Branch marked as contribution: $BRANCH"
+      echo "📝 Your commits will be rebased, not merged from parent"
+      echo "🔄 To resume normal: cd here && git town hack"
     '';
     
     wt-prototype.exec = ''
       #!/usr/bin/env bash
       set -euo pipefail
       
+      echo "🧪 Prototype: Mark as local-only experimental branch"
+      echo "📍 Run this from: ANY worktree for experiments"
+      echo "💡 Prototype branches are never pushed to remote"
+      echo "═══════════════════════════════════════════════════════"
+      
       # Mark as prototype branch (local only)
+      BRANCH=$(git branch --show-current)
       git town prototype
-      echo "🧪 Branch marked as prototype: $(git branch --show-current)"
+      echo "✅ Branch marked as prototype: $BRANCH"
+      echo "📝 This branch will never be pushed to remote"
+      echo "🔄 To make pushable: cd here && git town hack"
     '';
     
     gt-setup.exec = ''
@@ -855,43 +1086,188 @@ in
     # Show help/quick reference
     "?".exec = ''
       #!/usr/bin/env bash
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo "   🏭 AI Factory Floor - Command Reference"
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo ""
-      echo "📚 Worktree Management:"
-      echo "  wt-new <branch> [parent]  - Create new worktree"
-      echo "  wt-list                   - List all worktrees"
-      echo "  wt-cd                     - Interactive worktree switcher"
-      echo "  wt-clean                  - Remove merged worktrees"
-      echo "  wt-stack                  - Show branch stack structure"
-      echo ""
-      echo "🤖 AI Agent Commands:"
-      echo "  agent-start <issue#>      - Create worktree & start agent for issue"
-      echo "  agent-here                - Start agent in current worktree"
-      echo "  agent-status              - Show active AI agents"
-      echo ""
-      echo "🔌 MCP Server Commands:"
-      echo "  mcp-start                 - Start all MCP servers"
-      echo "  mcp-status                - Check MCP server status"
-      echo "  mcp-stop                  - Stop all MCP servers"
-      echo ""
-      echo "📊 Workflow Commands:"
-      echo "  issue-to-pr <issue#>      - Complete workflow from issue to PR"
-      echo "  stack-status              - Show current stack status"
-      echo "  stack-test                - Test stack integration"
-      echo ""
-      echo "🎨 Tools:"
-      echo "  devflow                   - Launch TUI interface"
-      echo "  gt-setup                  - Configure Git Town"
-      echo "  dev-setup                 - Initialize development environment"
-      echo ""
-      echo "💡 Tips:"
-      echo "  • Use '?' anytime to see this help"
-      echo "  • Nested worktrees: 'wt-new child-branch parent-branch'"
-      echo "  • View logs: 'tail -f .mcp/logs/*.log'"
-      echo "  • Set ANTHROPIC_API_KEY for AI features"
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      
+      # Check if user wants specific topic
+      TOPIC="''${1:-}"
+      
+      case "$TOPIC" in
+        ship|shipping)
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   🚢 Shipping Workflow Guide"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "What 'shipping' means:"
+          echo "  Merging your feature branch into its parent branch"
+          echo "  and cleaning up (deleting branch + worktree)"
+          echo ""
+          echo "When to use wt-ship:"
+          echo "  ✓ Solo work on small features"
+          echo "  ✓ Parent branch owner approved"
+          echo "  ✓ Hotfixes needing immediate merge"
+          echo ""
+          echo "When to use PR instead:"
+          echo "  ✓ Need code review from team"
+          echo "  ✓ Complex/critical features"
+          echo "  ✓ Company requires PR approval"
+          echo ""
+          echo "Ship workflow:"
+          echo "  1. cd worktrees/feat/my-feature"
+          echo "  2. git add -A && git commit -m 'feat: ...'"
+          echo "  3. wt-ship  # Syncs, merges, cleans up"
+          echo ""
+          echo "PR workflow:"
+          echo "  1. git push -u origin feat/my-feature"
+          echo "  2. gh pr create"
+          echo "  3. After approval: wt-ship"
+          ;;
+        
+        workflow|flow)
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   📈 Daily Workflow Pattern"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Morning:"
+          echo "  wt-sync-all              # Get latest from all parents"
+          echo "  wt-stack                 # View branch structure"
+          echo ""
+          echo "Starting new work:"
+          echo "  issue-to-pr 123          # Auto workflow from issue"
+          echo "  # OR manually:"
+          echo "  wt-new feat/feature-name # Create worktree"
+          echo "  cd worktrees/feat/feature-name"
+          echo ""
+          echo "During development:"
+          echo "  git add -A && git commit # Regular commits"
+          echo "  git town sync            # Sync with parent"
+          echo ""
+          echo "Branch states:"
+          echo "  wt-park                  # Pause work (skip syncing)"
+          echo "  wt-prototype             # Local-only experiments"
+          echo "  wt-observe               # Watch branch (no push)"
+          echo "  wt-contribute            # Contributing to others"
+          echo ""
+          echo "Completing work:"
+          echo "  wt-ship                  # Merge & cleanup"
+          echo "  # OR"
+          echo "  gh pr create             # Create PR for review"
+          ;;
+        
+        naming|branches)
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   🏷️  Branch Naming Convention"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Required format: <type>/<description>"
+          echo ""
+          echo "Types:"
+          echo "  feat/     - New features"
+          echo "  fix/      - Bug fixes"
+          echo "  test/     - Test additions/changes"
+          echo "  docs/     - Documentation only"
+          echo "  chore/    - Maintenance tasks"
+          echo "  hotfix/   - Urgent production fixes"
+          echo "  refactor/ - Code restructuring"
+          echo "  perf/     - Performance improvements"
+          echo "  style/    - Code style changes"
+          echo "  build/    - Build system changes"
+          echo "  ci/       - CI/CD changes"
+          echo "  revert/   - Revert previous changes"
+          echo ""
+          echo "Examples:"
+          echo "  feat/user-authentication"
+          echo "  fix/login-timeout-issue"
+          echo "  docs/api-endpoints"
+          echo "  chore/update-dependencies"
+          ;;
+        
+        local|integration)
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   🔀 Local Integration Workflow"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Problem: Multiple AI agents working in parallel"
+          echo "Solution: Merge locally first, test, then push"
+          echo ""
+          echo "Commands:"
+          echo "  wt-local-merge     - Merge 1 branch to parent (local only)"
+          echo "  wt-local-sync-all  - Merge ALL branches (local only)"
+          echo ""
+          echo "Workflow example:"
+          echo "  # Start multiple agents"
+          echo "  agent-start 101  # Creates feat/search"
+          echo "  agent-start 102  # Creates feat/filters"
+          echo "  agent-start 103  # Creates fix/pagination"
+          echo ""
+          echo "  # Test integration locally"
+          echo "  wt-local-sync-all"
+          echo "  # This merges all into main locally"
+          echo ""
+          echo "  # Test everything"
+          echo "  npm test"
+          echo ""
+          echo "  # If good, publish"
+          echo "  git push"
+          echo ""
+          echo "Key difference:"
+          echo "  wt-ship        = merge + push + delete (permanent)"
+          echo "  wt-local-merge = merge only (test first)"
+          echo ""
+          echo "Run locations:"
+          echo "  wt-local-merge     → from ANY child worktree"
+          echo "  wt-local-sync-all  → from ROOT project directory"
+          ;;
+        
+        *)
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   🏭 AI Factory Floor - Command Reference"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "📚 Worktree Management:"
+          echo "  wt-new <type>/<name> [parent] - Create semantic branch"
+          echo "  wt-list                        - List all worktrees"
+          echo "  wt-cd                          - Interactive switcher"
+          echo "  wt-clean                       - Remove merged worktrees"
+          echo "  wt-stack                       - Show branch hierarchy"
+          echo ""
+          echo "🔄 Git Town - Remote Sync & Ship:"
+          echo "  wt-sync-all      (from ROOT)   - Sync all with remote"
+          echo "  wt-ship          (from child)  - Ship to remote + cleanup"
+          echo "  wt-park          (from any)    - Pause syncing"
+          echo "  wt-observe       (from any)    - Watch only (no push)"
+          echo "  wt-contribute    (from any)    - Mark as contribution"
+          echo "  wt-prototype     (from any)    - Mark as local-only"
+          echo ""
+          echo "🔀 Local Integration (No Remote Push):"
+          echo "  wt-local-merge     (from child) - Merge to parent locally"
+          echo "  wt-local-sync-all  (from ROOT)  - Merge all children locally"
+          echo ""
+          echo "🤖 AI Agent Commands:"
+          echo "  agent-start <issue#>           - Auto-create semantic branch"
+          echo "  agent-here                     - Start agent in current"
+          echo "  issue-to-pr <issue#>           - Complete AI workflow"
+          echo ""
+          echo "🔌 MCP Servers:"
+          echo "  mcp-status                     - Check server status"
+          echo "  mcp-start/stop                 - Manual control"
+          echo ""
+          echo "🎨 Tools:"
+          echo "  devflow                        - Launch visual TUI"
+          echo "  gt-setup                       - Configure Git Town"
+          echo ""
+          echo "📖 Help Topics:"
+          echo "  ? workflow                     - Daily workflow guide"
+          echo "  ? shipping                     - When/how to ship branches"
+          echo "  ? naming                       - Branch naming rules"
+          echo "  ? local                        - Local integration workflow"
+          echo ""
+          echo "💡 Multi-Agent Workflow:"
+          echo "  1. agent-start 101, 102, 103   - Start multiple agents"
+          echo "  2. wt-local-sync-all           - Test integration locally"
+          echo "  3. Fix conflicts if any        - Resolve issues"
+          echo "  4. git push (from ROOT)        - Publish when ready"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          ;;
+      esac
     '';
     
   };
