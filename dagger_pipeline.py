@@ -44,9 +44,8 @@ class AIFactoryFloor:
             .with_exec(["apt-get", "install", "-y", 
                        "git", "curl", "build-essential", 
                        "nodejs", "npm", "python3", "python3-pip"])
-            # Install Claude CLI if available
-            .with_exec(["npm", "install", "-g", "@anthropic/claude-cli"], 
-                      skip_entrypoint=True)
+            # Install Claude Code CLI
+            .with_exec(["npm", "install", "-g", "@anthropic-ai/claude-code"])
             # Mount the source code
             .with_mounted_directory("/workspace", source)
         )
@@ -90,14 +89,15 @@ class AIFactoryFloor:
                 os.getenv("ANTHROPIC_API_KEY")
             )
         
-        # Run the AI agent
+        # Run the AI agent in non-interactive mode
         result = await (
             container
             .with_exec([
-                "claude", "--continue",
+                "claude", "--print",
                 f"Read issue #{issue_number} and implement the solution. "
                 f"Follow the workflow in CLAUDE.md. "
-                f"Commit changes with conventional commits."
+                f"Commit changes with conventional commits.",
+                "--continue"  # Continue from previous session if exists
             ])
             .stdout()
         )

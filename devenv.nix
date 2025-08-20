@@ -30,6 +30,7 @@ in
     ripgrep
     jq
     tree
+    zellij  # Terminal multiplexer
     
     # AI/MCP tools
     nodejs_20
@@ -116,8 +117,8 @@ in
       cp -n devenv.yaml "$WORKTREE_DIR/" 2>/dev/null || true
       cp -n devenv.lock "$WORKTREE_DIR/" 2>/dev/null || true
       
-      # Create zellij tab
-      if command -v zellij &> /dev/null; then
+      # Create zellij tab if in a zellij session
+      if [ -n "${ZELLIJ:-}" ]; then
         zellij action new-tab --name "$BRANCH" --cwd "$WORKTREE_DIR" 2>/dev/null || true
       fi
       
@@ -279,26 +280,25 @@ in
       
       cd "worktrees/$BRANCH"
       
-      # Run in container via dagger if available
-      if command -v dagger &> /dev/null; then
-        echo "🐳 Running in Dagger container..."
-        dagger call \
-          --source . \
-          dev-container \
-          --context-dir "$CONTEXT_DIR" \
-          with-exec --args bash,-c,"claude --continue 'Read /context/issue-$ISSUE.md and implement the solution.'"
+      # Install Claude Code CLI if not present
+      if ! command -v claude &> /dev/null; then
+        echo "📦 Installing Claude Code CLI..."
+        npm install -g @anthropic-ai/claude-code
+      fi
+      
+      # Create or switch to zellij tab for this agent
+      if [ -n "${ZELLIJ:-}" ]; then
+        echo "🖥️ Opening agent in new zellij tab: agent-$ISSUE"
+        zellij action new-tab --name "agent-$ISSUE" --cwd "worktrees/$BRANCH"
+        # Give claude initial context in the new tab
+        zellij action write-chars "claude --continue\n"
+        sleep 0.5
+        zellij action write-chars "Read .context/issue-$ISSUE.md and implement the solution. Follow the team workflow in CLAUDE.md. Commit your changes with conventional commits referencing #$ISSUE.\n"
       else
-        # Fallback to direct execution
-        echo "Note: Running without Dagger container isolation"
-        if command -v claude &> /dev/null; then
-          claude --continue << EOF
-      Read .context/issue-$ISSUE.md and implement the solution.
-      Follow the team workflow in CLAUDE.md.
-      Commit your changes with conventional commits referencing #$ISSUE.
-      EOF
-        else
-          echo "⚠️ Claude CLI not found. Please install it or set up MCP servers."
-        fi
+        echo "💻 Starting Claude in current terminal..."
+        echo "Context: Issue #$ISSUE in worktree $BRANCH"
+        echo "──────────────────────────────────────────────────"
+        claude --continue
       fi
     '';
     
@@ -339,25 +339,29 @@ in
       EOF
       fi
       
-      # Run in container via dagger if available
-      if command -v dagger &> /dev/null; then
-        echo "🐳 Running AI agent in Dagger container..."
-        dagger call \
-          --source . \
-          dev-container \
-          --context-dir .context \
-          with-exec --args bash,-c,"claude --continue 'Read context in /context/ and work on the task.'"
-      else
-        echo "💻 Running AI agent locally..."
-        if command -v claude &> /dev/null; then
-          claude --continue << EOF
-      Read the context in .context/ and work on the task.
-      Follow the team workflow in CLAUDE.md.
-      The current branch is $CURRENT_BRANCH.
-      EOF
+      # Install Claude Code CLI if not present
+      if ! command -v claude &> /dev/null; then
+        echo "📦 Installing Claude Code CLI..."
+        npm install -g @anthropic-ai/claude-code
+      fi
+      
+      # Create or switch to zellij tab for this agent
+      if [ -n "${ZELLIJ:-}" ]; then
+        echo "🖥️ Opening agent in new zellij tab: agent-$CURRENT_BRANCH"
+        zellij action new-tab --name "agent-$CURRENT_BRANCH"
+        # Give claude initial context in the new tab
+        zellij action write-chars "claude --continue\n"
+        sleep 0.5
+        if [ -n "$CONTEXT_FILES" ]; then
+          zellij action write-chars "Read the context in .context/ and work on the task. The current branch is $CURRENT_BRANCH.\n"
         else
-          echo "⚠️ Claude CLI not found. Please install it or set up MCP servers."
+          zellij action write-chars "Task: $TASK\nBranch: $CURRENT_BRANCH\n"
         fi
+      else
+        echo "💻 Starting Claude in current terminal..."
+        echo "Context: Current branch $CURRENT_BRANCH"
+        echo "──────────────────────────────────────────────────"
+        claude --continue
       fi
     '';
     

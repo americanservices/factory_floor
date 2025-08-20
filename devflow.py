@@ -107,9 +107,17 @@ class WorktreeManager:
     def create_worktree(self, branch_name: str, parent_branch: Optional[str] = None) -> bool:
         """Create a new worktree"""
         try:
-            cmd = ["devenv", "shell", "--impure", "-c", f"wt-new {branch_name}"]
-            if parent_branch:
-                cmd[-1] += f" {parent_branch}"
+            # Check if we're already in devenv shell
+            if os.environ.get('DEVENV_ROOT'):
+                # We're in devenv, call the script directly
+                cmd = ["wt-new", branch_name]
+                if parent_branch:
+                    cmd.append(parent_branch)
+            else:
+                # Not in devenv, need to use devenv shell
+                cmd = ["devenv", "shell", "--impure", "-c", f"wt-new {branch_name}"]
+                if parent_branch:
+                    cmd[-1] += f" {parent_branch}"
                 
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
@@ -161,11 +169,17 @@ class MCPServerManager:
     
     def start_servers(self):
         """Start all MCP servers"""
-        subprocess.run(["devenv", "shell", "--impure", "-c", "mcp-start"])
+        if os.environ.get('DEVENV_ROOT'):
+            subprocess.run(["mcp-start"])
+        else:
+            subprocess.run(["devenv", "shell", "--impure", "-c", "mcp-start"])
         
     def stop_servers(self):
         """Stop all MCP servers"""
-        subprocess.run(["devenv", "shell", "--impure", "-c", "mcp-stop"])
+        if os.environ.get('DEVENV_ROOT'):
+            subprocess.run(["mcp-stop"])
+        else:
+            subprocess.run(["devenv", "shell", "--impure", "-c", "mcp-stop"])
 
 
 class DevFlowTUI:
@@ -296,12 +310,27 @@ class DevFlowTUI:
             # Start agent in worktree
             worktree = Prompt.ask("[bold]Worktree name (or 'here' for current)[/bold]")
             if worktree == "here":
-                subprocess.run(["devenv", "shell", "--impure", "-c", "agent-here"])
+                # Start agent in current directory
+                if os.environ.get('DEVENV_ROOT'):
+                    subprocess.run(["agent-here"])
+                else:
+                    subprocess.run(["devenv", "shell", "--impure", "-c", "agent-here"])
             else:
-                # Switch to worktree and start agent
+                # Start agent in specific worktree
                 worktree_path = Path("worktrees") / worktree
                 if worktree_path.exists():
-                    subprocess.run(["devenv", "shell", "--impure", "-c", f"cd {worktree_path} && agent-here"])
+                    # If in zellij, switch to worktree and start agent
+                    if os.environ.get('ZELLIJ'):
+                        # Create a new tab for the agent
+                        subprocess.run(["zellij", "action", "new-tab", "--name", f"agent-{worktree}", "--cwd", str(worktree_path)])
+                        # Run agent-here in the new tab
+                        subprocess.run(["zellij", "action", "write-chars", "agent-here\n"])
+                    else:
+                        # Not in zellij, run in current terminal
+                        if os.environ.get('DEVENV_ROOT'):
+                            subprocess.run(["sh", "-c", f"cd {worktree_path} && agent-here"])
+                        else:
+                            subprocess.run(["devenv", "shell", "--impure", "-c", f"cd {worktree_path} && agent-here"])
                 else:
                     console.print(f"[red]Worktree {worktree} not found[/red]")
         elif key == "s":
