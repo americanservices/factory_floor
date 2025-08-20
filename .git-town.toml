@@ -1,0 +1,29 @@
+[branches]
+main = "master" # using master as main branch
+contribution-regex = ""
+default-type = "feature"
+feature-regex = "^(feat|fix|test|docs|chore|hotfix|refactor|perf|style|build|ci|revert)/"
+observed-regex = ""
+perennial-regex = "^(main|master|develop|staging|production)$"
+perennials = ["master", "main", "develop", "staging", "production"]
+
+[create]
+new-branch-type = "feature"
+share-new-branches = "no"
+
+[hosting]
+dev-remote = "origin"
+origin-hostname = ""
+forge-type = "github"
+
+[ship]
+delete-tracking-branch = true
+strategy = "api"
+
+[sync]
+feature-strategy = "merge"
+perennial-strategy = "rebase"
+prototype-strategy = "rebase"
+push-hook = true
+tags = true
+upstream = true

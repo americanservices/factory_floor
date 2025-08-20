@@ -315,8 +315,8 @@ in
         exit 1
       fi
       
-      # Get parent branch
-      PARENT=$(git town parent 2>/dev/null || git config "branch.$BRANCH.parent" 2>/dev/null || echo "main")
+      # Get parent branch (fallback for older git-town)
+      PARENT=$(git config "branch.$BRANCH.parent" 2>/dev/null || git config "git-town.main-branch" 2>/dev/null || echo "master")
       
       echo "🎯 Current branch: $BRANCH"
       echo "🎯 Target parent: $PARENT"
@@ -395,8 +395,8 @@ in
             all_branches+=("$branch")
             branch_to_path["$branch"]="$path"
             
-            # Try to get parent
-            parent=$(git -C "$path" town parent 2>/dev/null || git -C "$path" config "branch.$branch.parent" 2>/dev/null || "")
+            # Try to get parent (fallback for older git-town)
+            parent=$(git -C "$path" config "branch.$branch.parent" 2>/dev/null || git -C "$path" config "git-town.main-branch" 2>/dev/null || "")
             if [ -n "$parent" ]; then
               branch_parents["$branch"]="$parent"
             fi
