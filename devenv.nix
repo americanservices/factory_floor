@@ -280,25 +280,72 @@ in
       
       cd "worktrees/$BRANCH"
       
-      # Install Claude Code CLI if not present
-      if ! command -v claude &> /dev/null; then
-        echo "📦 Installing Claude Code CLI..."
-        npm install -g @anthropic-ai/claude-code
-      fi
-      
-      # Create or switch to zellij tab for this agent
-      if [ -n "${ZELLIJ:-}" ]; then
-        echo "🖥️ Opening agent in new zellij tab: agent-$ISSUE"
-        zellij action new-tab --name "agent-$ISSUE" --cwd "worktrees/$BRANCH"
-        # Give claude initial context in the new tab
-        zellij action write-chars "claude --continue\n"
-        sleep 0.5
-        zellij action write-chars "Read .context/issue-$ISSUE.md and implement the solution. Follow the team workflow in CLAUDE.md. Commit your changes with conventional commits referencing #$ISSUE.\n"
+      # Use Dagger for isolation if available, otherwise run locally
+      if command -v dagger &> /dev/null && command -v python &> /dev/null; then
+        echo "🐳 Running AI agent in Dagger container..."
+        
+        # Create Python script to run agent in Dagger
+        cat > /tmp/run-agent-$$.py << 'PYTHON_SCRIPT'
+import asyncio
+import dagger
+import os
+import sys
+
+async def main():
+    issue = sys.argv[1] if len(sys.argv) > 1 else "unknown"
+    branch = sys.argv[2] if len(sys.argv) > 2 else "unknown"
+    
+    async with dagger.Connection() as client:
+        # Build container with Claude CLI
+        container = (
+            client.container()
+            .from_("node:20-slim")
+            .with_exec(["apt-get", "update"])
+            .with_exec(["apt-get", "install", "-y", "git", "curl"])
+            .with_exec(["npm", "install", "-g", "@anthropic-ai/claude-code"])
+            .with_mounted_directory("/workspace", client.host().directory("."))
+            .with_workdir("/workspace")
+        )
+        
+        # Add API key if available
+        if os.getenv("ANTHROPIC_API_KEY"):
+            container = container.with_env_variable("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY"))
+        
+        # Run claude in interactive mode
+        print(f"Starting Claude for issue #{issue} in isolated container...")
+        await container.with_exec([
+            "claude", "--continue"
+        ]).stdout()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+PYTHON_SCRIPT
+        
+        python /tmp/run-agent-$$.py "$ISSUE" "$BRANCH"
+        rm -f /tmp/run-agent-$$.py
       else
-        echo "💻 Starting Claude in current terminal..."
-        echo "Context: Issue #$ISSUE in worktree $BRANCH"
-        echo "──────────────────────────────────────────────────"
-        claude --continue
+        # Fallback to local execution
+        echo "💻 Starting Claude locally (install Dagger for isolation)..."
+        
+        # Install Claude Code CLI if not present
+        if ! command -v claude &> /dev/null; then
+          echo "📦 Installing Claude Code CLI..."
+          npm install -g @anthropic-ai/claude-code
+        fi
+        
+        # Create or switch to zellij tab for this agent
+        if [ -n "${ZELLIJ:-}" ]; then
+          echo "🖥️ Opening agent in new zellij tab: agent-$ISSUE"
+          zellij action new-tab --name "agent-$ISSUE" --cwd "worktrees/$BRANCH"
+          # Give claude initial context in the new tab
+          zellij action write-chars "claude --continue\n"
+          sleep 0.5
+          zellij action write-chars "Read .context/issue-$ISSUE.md and implement the solution. Follow the team workflow in CLAUDE.md. Commit your changes with conventional commits referencing #$ISSUE.\n"
+        else
+          echo "Context: Issue #$ISSUE in worktree $BRANCH"
+          echo "──────────────────────────────────────────────────"
+          claude --continue
+        fi
       fi
     '';
     
@@ -339,29 +386,75 @@ in
       EOF
       fi
       
-      # Install Claude Code CLI if not present
-      if ! command -v claude &> /dev/null; then
-        echo "📦 Installing Claude Code CLI..."
-        npm install -g @anthropic-ai/claude-code
-      fi
-      
-      # Create or switch to zellij tab for this agent
-      if [ -n "${ZELLIJ:-}" ]; then
-        echo "🖥️ Opening agent in new zellij tab: agent-$CURRENT_BRANCH"
-        zellij action new-tab --name "agent-$CURRENT_BRANCH"
-        # Give claude initial context in the new tab
-        zellij action write-chars "claude --continue\n"
-        sleep 0.5
-        if [ -n "$CONTEXT_FILES" ]; then
-          zellij action write-chars "Read the context in .context/ and work on the task. The current branch is $CURRENT_BRANCH.\n"
-        else
-          zellij action write-chars "Task: $TASK\nBranch: $CURRENT_BRANCH\n"
-        fi
+      # Use Dagger for isolation if available, otherwise run locally
+      if command -v dagger &> /dev/null && command -v python &> /dev/null; then
+        echo "🐳 Running AI agent in Dagger container..."
+        
+        # Create Python script to run agent in Dagger
+        cat > /tmp/run-agent-here-$$.py << 'PYTHON_SCRIPT'
+import asyncio
+import dagger
+import os
+import sys
+
+async def main():
+    branch = sys.argv[1] if len(sys.argv) > 1 else "unknown"
+    
+    async with dagger.Connection() as client:
+        # Build container with Claude CLI
+        container = (
+            client.container()
+            .from_("node:20-slim")
+            .with_exec(["apt-get", "update"])
+            .with_exec(["apt-get", "install", "-y", "git", "curl"])
+            .with_exec(["npm", "install", "-g", "@anthropic-ai/claude-code"])
+            .with_mounted_directory("/workspace", client.host().directory("."))
+            .with_workdir("/workspace")
+        )
+        
+        # Add API key if available
+        if os.getenv("ANTHROPIC_API_KEY"):
+            container = container.with_env_variable("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY"))
+        
+        # Run claude in interactive mode
+        print(f"Starting Claude in branch {branch} in isolated container...")
+        await container.with_exec([
+            "claude", "--continue"
+        ]).stdout()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+PYTHON_SCRIPT
+        
+        python /tmp/run-agent-here-$$.py "$CURRENT_BRANCH"
+        rm -f /tmp/run-agent-here-$$.py
       else
-        echo "💻 Starting Claude in current terminal..."
-        echo "Context: Current branch $CURRENT_BRANCH"
-        echo "──────────────────────────────────────────────────"
-        claude --continue
+        # Fallback to local execution
+        echo "💻 Starting Claude locally (install Dagger for isolation)..."
+        
+        # Install Claude Code CLI if not present
+        if ! command -v claude &> /dev/null; then
+          echo "📦 Installing Claude Code CLI..."
+          npm install -g @anthropic-ai/claude-code
+        fi
+        
+        # Create or switch to zellij tab for this agent
+        if [ -n "${ZELLIJ:-}" ]; then
+          echo "🖥️ Opening agent in new zellij tab: agent-$CURRENT_BRANCH"
+          zellij action new-tab --name "agent-$CURRENT_BRANCH"
+          # Give claude initial context in the new tab
+          zellij action write-chars "claude --continue\n"
+          sleep 0.5
+          if [ -n "$CONTEXT_FILES" ]; then
+            zellij action write-chars "Read the context in .context/ and work on the task. The current branch is $CURRENT_BRANCH.\n"
+          else
+            zellij action write-chars "Task: $TASK\nBranch: $CURRENT_BRANCH\n"
+          fi
+        else
+          echo "Context: Current branch $CURRENT_BRANCH"
+          echo "──────────────────────────────────────────────────"
+          claude --continue
+        fi
       fi
     '';
     
