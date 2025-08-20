@@ -71,7 +71,7 @@ class WorktreeManager:
             if current_wt:
                 worktrees.append(current_wt)
                 
-            # Add additional metadata
+            # Add additional metadata - first pass
             for wt in worktrees:
                 path = Path(wt['path'])
                 wt['name'] = path.name if path != self.root_dir else 'main'
@@ -88,15 +88,15 @@ class WorktreeManager:
                 else:
                     wt['has_context'] = False
                     
-                # Check for nested worktrees
+            # Second pass - build parent-child relationships
+            for wt in worktrees:
+                path = Path(wt['path'])
                 wt['children'] = []
-                if path != self.root_dir:
-                    worktree_subdir = path / 'worktrees'
-                    if worktree_subdir.exists():
-                        for child in worktrees:
-                            child_path = Path(child['path'])
-                            if child_path.parent.parent == path:
-                                wt['children'].append(child['name'])
+                for child in worktrees:
+                    child_path = Path(child['path'])
+                    # Check if child is a direct subdirectory of this worktree
+                    if child_path.parent == path:
+                        wt['children'].append(child['name'])
                                 
             return worktrees
             
@@ -181,8 +181,17 @@ class DevFlowTUI:
         tree = Tree("🌳 [bold]Worktrees[/bold]")
         worktrees = self.wt_manager.get_worktrees()
         
-        # Build tree structure
-        root_wts = [wt for wt in worktrees if Path(wt['path']).parent == self.wt_manager.root_dir.parent or Path(wt['path']) == self.wt_manager.root_dir]
+        # Build tree structure - show all top-level worktrees
+        # Root worktrees are either the main directory or direct children of worktrees/
+        root_wts = []
+        for wt in worktrees:
+            wt_path = Path(wt['path'])
+            # Include main directory
+            if wt_path == self.wt_manager.root_dir:
+                root_wts.append(wt)
+            # Include direct children of worktrees/ directory
+            elif wt_path.parent == self.wt_manager.root_dir / 'worktrees':
+                root_wts.append(wt)
         
         for wt in root_wts:
             branch_name = wt.get('branch', 'detached')
