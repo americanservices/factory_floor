@@ -62,13 +62,26 @@ in
       
       if [ $# -lt 1 ]; then
         echo "Usage: wt-new <branch-name> [parent-branch]"
+        echo "Branch naming convention: <type>/<description>"
+        echo "Types: feat, fix, test, docs, chore, hotfix, refactor, perf, style, build, ci, revert"
         echo "Examples:"
-        echo "  wt-new feat-auth"
-        echo "  wt-new feat-auth-oauth feat-auth"
+        echo "  wt-new feat/auth-system"
+        echo "  wt-new fix/login-timeout"
+        echo "  wt-new feat/oauth feat/auth-system"
         exit 1
       fi
       
       BRANCH="$1"
+      
+      # Enforce semantic branch naming (unless it's a perennial branch)
+      if ! echo "$BRANCH" | grep -qE '^(main|master|develop|staging|production)$'; then
+        if ! echo "$BRANCH" | grep -qE '^(feat|fix|test|docs|chore|hotfix|refactor|perf|style|build|ci|revert)/'; then
+          echo "❌ Branch name must follow semantic naming: <type>/<description>"
+          echo "Valid types: feat, fix, test, docs, chore, hotfix, refactor, perf, style, build, ci, revert"
+          echo "Example: feat/add-authentication"
+          exit 1
+        fi
+      fi
       PARENT="''${2:-}"
       
       # Ensure we have at least one commit
@@ -102,6 +115,17 @@ in
         # If base branch doesn't exist, use HEAD
         git worktree add -b "$BRANCH" "$WORKTREE_DIR" HEAD
       fi
+      
+      # Configure with git-town based on branch type
+      cd "$WORKTREE_DIR"
+      if echo "$BRANCH" | grep -qE '^(main|master|develop|staging|production)$'; then
+        # Mark as perennial branch
+        git town perennial-branch add "$BRANCH" 2>/dev/null || true
+      else
+        # Mark as feature branch
+        git town hack 2>/dev/null || true
+      fi
+      cd - > /dev/null
       
       # Set up context directory
       mkdir -p "$WORKTREE_DIR/.context"
@@ -233,6 +257,126 @@ in
     '';
     
     # ============================================
+    # GIT TOWN INTEGRATION
+    # ============================================
+    
+    wt-sync-all.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🔄 Syncing all worktrees with their parent branches..."
+      echo "============================================"
+      
+      # First sync main
+      echo "📍 Syncing main branch..."
+      git town sync
+      
+      # Get all worktrees
+      git worktree list --porcelain | grep "^worktree " | cut -d' ' -f2 | while read -r worktree_path; do
+        if [ "$worktree_path" != "$(pwd)" ]; then
+          echo ""
+          echo "📍 Syncing $worktree_path..."
+          cd "$worktree_path"
+          
+          # Only sync if not parked
+          if ! git town parked-branches | grep -q "$(git branch --show-current)"; then
+            git town sync || echo "⚠️  Failed to sync $(basename "$worktree_path")"
+          else
+            echo "⏸️  Skipping parked branch"
+          fi
+        fi
+      done
+      
+      echo ""
+      echo "✅ All worktrees synced!"
+    '';
+    
+    wt-ship.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      # Ship current worktree branch
+      BRANCH=$(git branch --show-current)
+      
+      if [ -z "$BRANCH" ]; then
+        echo "❌ Not on a branch"
+        exit 1
+      fi
+      
+      if echo "$BRANCH" | grep -qE '^(main|master|develop|staging|production)$'; then
+        echo "❌ Cannot ship perennial branch: $BRANCH"
+        exit 1
+      fi
+      
+      echo "🚢 Shipping branch: $BRANCH"
+      
+      # First sync to get latest changes
+      git town sync
+      
+      # Then ship the branch
+      git town ship
+      
+      # Remove the worktree after shipping
+      cd ..
+      if [[ "$PWD" == */worktrees* ]]; then
+        WORKTREE_NAME=$(basename "$OLDPWD")
+        git worktree remove "$WORKTREE_NAME" --force
+        echo "🗑️  Removed worktree: $WORKTREE_NAME"
+      fi
+    '';
+    
+    wt-park.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      # Park current branch (stop syncing)
+      git town park
+      echo "⏸️  Branch parked: $(git branch --show-current)"
+    '';
+    
+    wt-observe.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      # Observe current branch (sync but don't push)
+      git town observe
+      echo "👀 Branch set to observe mode: $(git branch --show-current)"
+    '';
+    
+    wt-contribute.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      # Mark as contribution branch
+      git town contribute
+      echo "🤝 Branch marked as contribution: $(git branch --show-current)"
+    '';
+    
+    wt-prototype.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      # Mark as prototype branch (local only)
+      git town prototype
+      echo "🧪 Branch marked as prototype: $(git branch --show-current)"
+    '';
+    
+    gt-setup.exec = ''
+      #!/usr/bin/env bash
+      set -euo pipefail
+      
+      echo "🔧 Setting up Git Town..."
+      
+      # Interactive setup
+      git town config setup
+      
+      # Set perennial branches
+      git town perennial-branches add main master develop staging production 2>/dev/null || true
+      
+      echo "✅ Git Town configured!"
+    '';
+    
+    # ============================================
     # AI AGENT MANAGEMENT
     # ============================================
     
@@ -251,8 +395,25 @@ in
       ISSUE_TITLE=$(gh issue view "$ISSUE" --json title -q .title)
       ISSUE_BODY=$(gh issue view "$ISSUE" --json body -q .body)
       
-      # Create branch name
-      BRANCH="issue-$ISSUE-$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -c1-30)"
+      # Determine branch type based on issue labels
+      LABELS=$(gh issue view "$ISSUE" --json labels -q '.labels[].name' 2>/dev/null | tr '\n' ' ' || echo "")
+      
+      PREFIX="feat"
+      if echo "$LABELS $ISSUE_TITLE" | grep -qiE 'bug|fix|error|broken'; then
+        PREFIX="fix"
+      elif echo "$LABELS $ISSUE_TITLE" | grep -qiE 'docs|documentation|readme'; then
+        PREFIX="docs"
+      elif echo "$LABELS $ISSUE_TITLE" | grep -qiE 'test|testing|spec'; then
+        PREFIX="test"
+      elif echo "$LABELS $ISSUE_TITLE" | grep -qiE 'chore|maintenance|dependency|dependencies'; then
+        PREFIX="chore"
+      elif echo "$LABELS $ISSUE_TITLE" | grep -qiE 'hotfix|urgent|critical'; then
+        PREFIX="hotfix"
+      fi
+      
+      # Create semantic branch name
+      CLEAN_TITLE=$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
+      BRANCH="$PREFIX/$ISSUE-$CLEAN_TITLE"
       
       # Create worktree
       wt-new "$BRANCH"
@@ -733,25 +894,6 @@ in
       echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     '';
     
-    # Git Town configuration helper
-    gt-setup.exec = ''
-      #!/usr/bin/env bash
-      set -euo pipefail
-      
-      echo "🏘️ Configuring Git Town..."
-      
-      # Set main branch
-      git town config main-branch main || true
-      
-      # Set perennial branches
-      git town config perennial-branches "main master develop staging" || true
-      
-      # Enable features
-      git town config sync-before-ship true || true
-      git town config ship-delete-tracking-branch true || true
-      
-      echo "✅ Git Town configured"
-    '';
   };
 
   # Environment variables
@@ -843,17 +985,20 @@ in
     
     echo "📚 Quick Reference:"
     echo "  Worktrees:   wt-new, wt-list, wt-cd, wt-clean, wt-stack"
+    echo "  Git Town:    wt-sync-all, wt-ship, wt-park, wt-observe, wt-contribute, wt-prototype"
     echo "  AI Agents:   agent-start, agent-here, agent-status"
     echo "  Workflow:    issue-to-pr <issue#>"
     echo "  MCP:         mcp-start, mcp-status, mcp-stop"
     echo "  Stack:       stack-status, stack-test"
     echo "  TUI:         devflow"
+    echo "  Setup:       gt-setup (configure Git Town)"
     echo ""
     echo "💡 Tips:"
-    echo "  • Use 'wt-new child parent' for nested worktrees"
+    echo "  • Branch naming: feat/, fix/, test/, docs/, chore/, hotfix/, etc."
+    echo "  • Use 'wt-sync-all' to sync all worktrees with their parents"
+    echo "  • Use 'wt-ship' to merge and cleanup current worktree"
     echo "  • Run 'issue-to-pr 123' for complete workflow"
     echo "  • Check 'CLAUDE.md' for AI instructions"
-    echo "  • Python venv (.venv) is automatically activated"
     echo ""
     
     # Check for required API keys
