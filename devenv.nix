@@ -613,6 +613,478 @@ No remote push performed."; then
         echo "🔄 To make pushable: cd here && git town hack"
       '';
       
+      # ============================================
+      # AUTOMATED MERGE AND CLEANUP COMMANDS
+      # ============================================
+      
+      wt-merge-branch.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        echo "🔀 Merge Branch: One-command merge with cleanup"
+        echo "📍 Run this from: Parent worktree or ROOT project directory" 
+        echo "💡 Merges specified branch into its parent with conflict resolution"
+        echo "══════════════════════════════════════════════════════════════════"
+        
+        BRANCH_TO_MERGE="''${1:-}"
+        if [ -z "$BRANCH_TO_MERGE" ]; then
+          echo "Usage: wt-merge-branch <branch-name>"
+          echo ""
+          echo "Available branches:"
+          git branch -a | grep -v HEAD | sed 's/^../  /'
+          exit 1
+        fi
+        
+        # Check if branch exists
+        if ! git show-ref --verify --quiet "refs/heads/$BRANCH_TO_MERGE"; then
+          if ! git show-ref --verify --quiet "refs/remotes/origin/$BRANCH_TO_MERGE"; then
+            echo "❌ Branch '$BRANCH_TO_MERGE' not found"
+            exit 1
+          fi
+        fi
+        
+        # Get parent branch for the branch to merge
+        PARENT_BRANCH=$(git config "branch.$BRANCH_TO_MERGE.parent" 2>/dev/null || git config "git-town.main-branch" 2>/dev/null || echo "master")
+        
+        echo "🎯 Branch to merge: $BRANCH_TO_MERGE"
+        echo "🎯 Target parent: $PARENT_BRANCH"
+        echo ""
+        
+        # Find worktrees
+        CHILD_WORKTREE=$(git worktree list | grep "\[$BRANCH_TO_MERGE\]" | awk '{print $1}' | head -1)
+        PARENT_WORKTREE=$(git worktree list | grep "\[$PARENT_BRANCH\]" | awk '{print $1}' | head -1)
+        
+        if [ -z "$PARENT_WORKTREE" ]; then
+          echo "❌ Parent worktree not found for branch: $PARENT_BRANCH"
+          echo "💡 Create parent worktree first: wt-new $PARENT_BRANCH"
+          exit 1
+        fi
+        
+        # Show preview
+        echo "📋 Preview of changes to be merged:"
+        if [ -n "$CHILD_WORKTREE" ]; then
+          echo "    From: $CHILD_WORKTREE"
+        fi
+        echo "    To:   $PARENT_WORKTREE"
+        
+        # Show commit diff
+        if git log --oneline "$PARENT_BRANCH..$BRANCH_TO_MERGE" --max-count=5 2>/dev/null | head -5; then
+          echo ""
+          echo "📝 Recent commits to merge:"
+          git log --oneline "$PARENT_BRANCH..$BRANCH_TO_MERGE" --max-count=5 | sed 's/^/    /'
+        fi
+        echo ""
+        
+        # Confirmation
+        read -p "Continue with merge? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+          echo "❌ Merge cancelled"
+          exit 1
+        fi
+        
+        # Save current directory
+        ORIGINAL_DIR=$(pwd)
+        
+        # Switch to parent worktree
+        cd "$PARENT_WORKTREE"
+        
+        # Update parent from origin
+        echo "🔄 Updating parent from origin..."
+        git fetch origin 2>/dev/null || true
+        
+        # Try fast-forward first
+        if git merge "origin/$PARENT_BRANCH" --ff-only 2>/dev/null; then
+          echo "✅ Parent fast-forwarded"
+        else
+          echo "⚠️  Could not fast-forward parent (may have local changes)"
+        fi
+        
+        # Attempt merge
+        echo "🔀 Merging $BRANCH_TO_MERGE into $PARENT_BRANCH..."
+        if git merge "$BRANCH_TO_MERGE" --no-ff -m "feat: merge $BRANCH_TO_MERGE into $PARENT_BRANCH
+
+Automated merge via wt-merge-branch command."; then
+          echo "✅ Merge successful!"
+          
+          # Push to remote
+          echo "📤 Pushing changes to remote..."
+          if git push origin "$PARENT_BRANCH"; then
+            echo "✅ Changes pushed to remote"
+            
+            # Cleanup: remove worktree and branch
+            if [ -n "$CHILD_WORKTREE" ] && [ "$CHILD_WORKTREE" != "$PARENT_WORKTREE" ]; then
+              echo "🧹 Cleaning up worktree and branch..."
+              
+              # Remove worktree
+              echo "    Removing worktree: $CHILD_WORKTREE"
+              git worktree remove "$CHILD_WORKTREE" --force 2>/dev/null || echo "⚠️  Could not remove worktree"
+              
+              # Delete branch
+              echo "    Deleting branch: $BRANCH_TO_MERGE"  
+              git branch -d "$BRANCH_TO_MERGE" 2>/dev/null || git branch -D "$BRANCH_TO_MERGE" 2>/dev/null || echo "⚠️  Could not delete branch"
+              
+              # Remove git-town config
+              git config --unset "branch.$BRANCH_TO_MERGE.parent" 2>/dev/null || true
+              git config --unset "branch.$BRANCH_TO_MERGE.pushremote" 2>/dev/null || true
+            fi
+            
+            echo "✅ Merge and cleanup complete!"
+          else
+            echo "❌ Failed to push to remote"
+            echo "💡 Merge completed locally, push manually when ready"
+          fi
+        else
+          echo "❌ Merge conflict detected!"
+          echo ""
+          echo "🔧 Conflict resolution options:"
+          echo "   1. Fix conflicts manually:"
+          echo "      - Edit conflicted files"
+          echo "      - git add <resolved-files>"
+          echo "      - git commit"
+          echo "   2. Use merge tool: git mergetool"
+          echo "   3. Abort merge: git merge --abort"
+          echo ""
+          echo "📍 You are now in: $PARENT_WORKTREE"
+          echo "🔄 After resolving, run this command again to complete cleanup"
+          
+          # Stay in the conflicted directory for user to resolve
+          cd "$ORIGINAL_DIR"
+          exit 1
+        fi
+        
+        # Return to original directory
+        cd "$ORIGINAL_DIR"
+        echo "📍 Returned to: $ORIGINAL_DIR"
+      '';
+      
+      wt-auto-clean.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        echo "🧹 Auto Clean: Intelligent cleanup of merged branches"
+        echo "📍 Run this from: ROOT project directory"
+        echo "💡 Finds merged branches and safely removes worktrees + branches"
+        echo "═══════════════════════════════════════════════════════════════════"
+        
+        # Check if we're in git repo
+        if ! git rev-parse --git-dir > /dev/null 2>&1; then
+          echo "❌ Not in a git repository"
+          exit 1
+        fi
+        
+        # Get main branch
+        MAIN_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+        if ! git show-ref --verify --quiet "refs/remotes/origin/$MAIN_BRANCH"; then
+          MAIN_BRANCH="master"
+        fi
+        
+        echo "🎯 Main branch: $MAIN_BRANCH"
+        echo "🔍 Scanning for merged branches..."
+        echo ""
+        
+        # Get all worktrees and check which branches are merged
+        declare -a branches_to_clean=()
+        declare -a worktrees_to_remove=()
+        
+        git worktree list --porcelain | while IFS= read -r line; do
+          if [[ $line =~ ^worktree[[:space:]]+(.+) ]]; then
+            worktree_path="''${BASH_REMATCH[1]}"
+            
+            # Skip if it's the main worktree
+            if [ "$worktree_path" = "$(git worktree list | head -1 | awk '{print $1}')" ]; then
+              continue
+            fi
+            
+            # Get branch for this worktree
+            branch=$(git -C "$worktree_path" branch --show-current 2>/dev/null || "")
+            if [ -z "$branch" ]; then
+              continue
+            fi
+            
+            # Skip if it's a perennial branch
+            if echo "$branch" | grep -qE '^(main|master|develop|staging|production)$'; then
+              continue
+            fi
+            
+            # Check if branch is merged into main
+            if git branch --merged "origin/$MAIN_BRANCH" 2>/dev/null | grep -q "^[[:space:]]*$branch$"; then
+              echo "🔍 Found merged branch: $branch (worktree: $worktree_path)"
+              branches_to_clean+=("$branch")
+              worktrees_to_remove+=("$worktree_path")
+            fi
+          fi
+        done
+        
+        # Read the arrays (bash limitation workaround)
+        mapfile -t branches_to_clean < <(git worktree list --porcelain | while IFS= read -r line; do
+          if [[ $line =~ ^worktree[[:space:]]+(.+) ]]; then
+            worktree_path="''${BASH_REMATCH[1]}"
+            if [ "$worktree_path" = "$(git worktree list | head -1 | awk '{print $1}')" ]; then
+              continue
+            fi
+            branch=$(git -C "$worktree_path" branch --show-current 2>/dev/null || "")
+            if [ -z "$branch" ] || echo "$branch" | grep -qE '^(main|master|develop|staging|production)$'; then
+              continue
+            fi
+            if git branch --merged "origin/$MAIN_BRANCH" 2>/dev/null | grep -q "^[[:space:]]*$branch$"; then
+              echo "$branch"
+            fi
+          fi
+        done)
+        
+        mapfile -t worktrees_to_remove < <(git worktree list --porcelain | while IFS= read -r line; do
+          if [[ $line =~ ^worktree[[:space:]]+(.+) ]]; then
+            worktree_path="''${BASH_REMATCH[1]}"
+            if [ "$worktree_path" = "$(git worktree list | head -1 | awk '{print $1}')" ]; then
+              continue
+            fi
+            branch=$(git -C "$worktree_path" branch --show-current 2>/dev/null || "")
+            if [ -z "$branch" ] || echo "$branch" | grep -qE '^(main|master|develop|staging|production)$'; then
+              continue  
+            fi
+            if git branch --merged "origin/$MAIN_BRANCH" 2>/dev/null | grep -q "^[[:space:]]*$branch$"; then
+              echo "$worktree_path"
+            fi
+          fi
+        done)
+        
+        if [ ''${#branches_to_clean[@]} -eq 0 ]; then
+          echo "✅ No merged branches found to clean up"
+          exit 0
+        fi
+        
+        echo ""
+        echo "📋 Branches to clean up:"
+        for i in "''${!branches_to_clean[@]}"; do
+          branch="''${branches_to_clean[$i]}"
+          worktree="''${worktrees_to_remove[$i]}"
+          echo "   $((i+1)). $branch (worktree: $worktree)"
+        done
+        echo ""
+        
+        # Confirmation
+        read -p "Clean up ''${#branches_to_clean[@]} merged branches? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+          echo "❌ Cleanup cancelled"
+          exit 0
+        fi
+        
+        echo "🧹 Starting cleanup..."
+        
+        # Clean up each branch
+        for i in "''${!branches_to_clean[@]}"; do
+          branch="''${branches_to_clean[$i]}"
+          worktree_path="''${worktrees_to_remove[$i]}"
+          
+          echo "    Cleaning $branch..."
+          
+          # Remove worktree
+          if git worktree remove "$worktree_path" --force 2>/dev/null; then
+            echo "      ✅ Removed worktree: $worktree_path"
+          else
+            echo "      ⚠️  Could not remove worktree: $worktree_path"
+          fi
+          
+          # Delete branch
+          if git branch -d "$branch" 2>/dev/null; then
+            echo "      ✅ Deleted branch: $branch"
+          elif git branch -D "$branch" 2>/dev/null; then
+            echo "      ✅ Force deleted branch: $branch"
+          else
+            echo "      ⚠️  Could not delete branch: $branch"
+          fi
+          
+          # Remove git-town configuration
+          git config --unset "branch.$branch.parent" 2>/dev/null || true
+          git config --unset "branch.$branch.pushremote" 2>/dev/null || true
+        done
+        
+        echo ""
+        echo "✅ Auto cleanup complete!"
+        echo "📊 Cleaned up ''${#branches_to_clean[@]} merged branches"
+        echo "💡 Run 'wt-list' to see remaining worktrees"
+      '';
+      
+      wt-ship-all.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        echo "🚢 Ship All: Batch ship multiple ready branches"
+        echo "📍 Run this from: ROOT project directory"
+        echo "💡 Scans for completed branches and ships them in dependency order"
+        echo "══════════════════════════════════════════════════════════════════"
+        
+        # Check if we're in git repo
+        if ! git rev-parse --git-dir > /dev/null 2>&1; then
+          echo "❌ Not in a git repository"
+          exit 1
+        fi
+        
+        echo "🔍 Scanning for ready-to-ship branches..."
+        
+        # Get all worktrees
+        declare -a candidate_branches=()
+        declare -a candidate_worktrees=()
+        
+        while IFS= read -r line; do
+          if [[ $line =~ ^worktree[[:space:]]+(.+) ]]; then
+            worktree_path="''${BASH_REMATCH[1]}"
+            
+            # Skip main worktree
+            if [ "$worktree_path" = "$(git worktree list | head -1 | awk '{print $1}')" ]; then
+              continue
+            fi
+            
+            branch=$(git -C "$worktree_path" branch --show-current 2>/dev/null || "")
+            if [ -z "$branch" ]; then
+              continue
+            fi
+            
+            # Skip perennial branches
+            if echo "$branch" | grep -qE '^(main|master|develop|staging|production)$'; then
+              continue
+            fi
+            
+            # Check if branch has any commits (is ready to ship)
+            parent_branch=$(git -C "$worktree_path" config "branch.$branch.parent" 2>/dev/null || git config "git-town.main-branch" 2>/dev/null || echo "master")
+            
+            if git log --oneline "$parent_branch..$branch" --max-count=1 2>/dev/null | grep -q .; then
+              candidate_branches+=("$branch")
+              candidate_worktrees+=("$worktree_path")
+            fi
+          fi
+        done < <(git worktree list --porcelain)
+        
+        if [ ''${#candidate_branches[@]} -eq 0 ]; then
+          echo "✅ No branches ready to ship found"
+          echo "💡 Branches need commits to be eligible for shipping"
+          exit 0
+        fi
+        
+        echo ""
+        echo "📋 Ready-to-ship branches found:"
+        for i in "''${!candidate_branches[@]}"; do
+          branch="''${candidate_branches[$i]}"
+          worktree="''${candidate_worktrees[$i]}"
+          parent_branch=$(git -C "$worktree" config "branch.$branch.parent" 2>/dev/null || echo "main")
+          commit_count=$(git log --oneline "$parent_branch..$branch" 2>/dev/null | wc -l || echo "0")
+          
+          echo "   $((i+1)). $branch → $parent_branch ($commit_count commits)"
+          echo "      Path: $worktree"
+          
+          # Show latest commit
+          latest_commit=$(git -C "$worktree" log --oneline -1 2>/dev/null | head -1 || echo "")
+          if [ -n "$latest_commit" ]; then
+            echo "      Latest: $latest_commit"
+          fi
+          echo ""
+        done
+        
+        # Interactive selection
+        echo "📝 Select branches to ship:"
+        echo "   (a)ll branches"
+        echo "   (s)elect specific branches"
+        echo "   (n)one - cancel"
+        echo ""
+        read -p "Choice (a/s/n): " -n 1 -r
+        echo
+        
+        declare -a branches_to_ship=()
+        declare -a worktrees_to_ship=()
+        
+        case $REPLY in
+          [Aa])
+            branches_to_ship=("''${candidate_branches[@]}")
+            worktrees_to_ship=("''${candidate_worktrees[@]}")
+            ;;
+          [Ss])
+            echo ""
+            for i in "''${!candidate_branches[@]}"; do
+              branch="''${candidate_branches[$i]}"
+              read -p "Ship $branch? (y/n): " -n 1 -r
+              echo
+              if [[ $REPLY =~ ^[Yy]$ ]]; then
+                branches_to_ship+=("$branch")
+                worktrees_to_ship+=("''${candidate_worktrees[$i]}")
+              fi
+            done
+            ;;
+          *)
+            echo "❌ Shipping cancelled"
+            exit 0
+            ;;
+        esac
+        
+        if [ ''${#branches_to_ship[@]} -eq 0 ]; then
+          echo "❌ No branches selected for shipping"
+          exit 0
+        fi
+        
+        echo ""
+        echo "🚢 Shipping ''${#branches_to_ship[@]} branches in order..."
+        echo ""
+        
+        # Ship each branch
+        for i in "''${!branches_to_ship[@]}"; do
+          branch="''${branches_to_ship[$i]}"
+          worktree_path="''${worktrees_to_ship[$i]}"
+          
+          echo "📦 Shipping branch $((i+1))/''${#branches_to_ship[@]}: $branch"
+          echo "    From: $worktree_path"
+          
+          # Change to worktree directory
+          cd "$worktree_path"
+          
+          # Check for uncommitted changes
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "    ⚠️  Found uncommitted changes, committing..."
+            git add -A
+            git commit -m "chore: final changes before shipping
+
+Automated commit from wt-ship-all command." || echo "    ⚠️  Could not commit changes"
+          fi
+          
+          # Sync first
+          echo "    🔄 Syncing with parent..."
+          if git town sync; then
+            echo "    ✅ Sync successful"
+            
+            # Ship the branch
+            echo "    🚢 Shipping to remote..."
+            if git town ship; then
+              echo "    ✅ Ship successful: $branch"
+              
+              # Clean up worktree after shipping (git-town should handle this, but let's be safe)
+              if [ -d "$worktree_path" ]; then
+                echo "    🧹 Cleaning up worktree..."
+                cd ..
+                if [[ "$PWD" == */worktrees* ]]; then
+                  WORKTREE_NAME=$(basename "$worktree_path")
+                  git worktree remove "$WORKTREE_NAME" --force 2>/dev/null || echo "    ⚠️  Could not remove worktree"
+                fi
+              fi
+            else
+              echo "    ❌ Ship failed for: $branch"
+              echo "    💡 Resolve issues manually in: $worktree_path"
+            fi
+          else
+            echo "    ❌ Sync failed for: $branch"
+            echo "    💡 Resolve conflicts manually in: $worktree_path"
+          fi
+          
+          echo ""
+        done
+        
+        # Return to project root
+        cd "$(git rev-parse --show-toplevel)"
+        
+        echo "✅ Batch shipping complete!"
+        echo "📊 Attempted to ship ''${#branches_to_ship[@]} branches"
+        echo "💡 Run 'wt-list' to see remaining worktrees"
+      '';
+      
       gt-setup.exec = ''
         #!/usr/bin/env bash
         set -euo pipefail
@@ -1433,6 +1905,11 @@ PYTHON_SCRIPT
             echo "🔀 Local Integration (No Remote Push):"
             echo "    wt-local-merge       (from child) - Merge to parent locally"
             echo "    wt-local-sync-all  (from ROOT)    - Merge all children locally"
+            echo ""
+            echo "🚀 Automated Merge & Cleanup:"
+            echo "    wt-merge-branch <branch> (from ROOT) - One-command merge with cleanup"
+            echo "    wt-auto-clean            (from ROOT) - Intelligent cleanup of merged branches"
+            echo "    wt-ship-all              (from ROOT) - Batch ship multiple ready branches"
             echo ""
             echo "🤖 AI Agent Commands:"
             echo "    agent-start <issue#>           - Auto-create semantic branch"
