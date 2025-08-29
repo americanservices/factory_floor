@@ -42,6 +42,9 @@ in
       # Text processing
       bat
       fd
+      
+      # Security & secret management
+      _1password  # 1Password CLI (op)
     ];
 
     # Git hooks configuration - disabled for now
@@ -1689,6 +1692,301 @@ PYTHON_SCRIPT
       '';
       
       # ============================================
+      # 1PASSWORD INTEGRATION
+      # ============================================
+      
+      # Login to 1Password and setup session
+      op-login.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        echo "🔐 1Password Login"
+        echo "=================="
+        
+        # Check if op is available
+        if ! command -v op &> /dev/null; then
+          echo "❌ 1Password CLI (op) not found"
+          echo "💡 Make sure devenv is loaded properly"
+          exit 1
+        fi
+        
+        # Check if already signed in
+        if op account list &>/dev/null; then
+          echo "✅ Already signed in to 1Password"
+          
+          # List accounts
+          echo ""
+          echo "📋 Available accounts:"
+          op account list --format=table
+          echo ""
+          
+          # Check session status
+          if op vault list &>/dev/null; then
+            echo "✅ Session is active"
+            echo "💡 Use 'op-secrets' to retrieve secrets"
+          else
+            echo "⚠️ Session expired. Please authenticate:"
+            op signin
+          fi
+        else
+          echo "🔑 Signing in to 1Password..."
+          echo "💡 This will open your browser for authentication"
+          op signin
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ Successfully signed in!"
+            echo "📋 Available accounts:"
+            op account list --format=table
+          else
+            echo "❌ Sign-in failed"
+            exit 1
+          fi
+        fi
+        
+        echo ""
+        echo "🎯 Next steps:"
+        echo "  • op-secrets              - Interactive secret retrieval"
+        echo "  • op-env <vault> <item>    - Export secrets as env vars"
+        echo "  • op-status               - Check connection status"
+      '';
+      
+      # Alias for consistency  
+      "1pass-login".exec = ''
+        exec op-login "$@"
+      '';
+      
+      # Interactive secret browser and retrieval
+      op-secrets.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        echo "🔍 1Password Secret Browser"
+        echo "==========================="
+        
+        # Check authentication
+        if ! op vault list &>/dev/null; then
+          echo "❌ Not authenticated with 1Password"
+          echo "💡 Run 'op-login' first"
+          exit 1
+        fi
+        
+        # Interactive vault selection
+        echo "📁 Available vaults:"
+        VAULT=$(op vault list --format=json | jq -r '.[].name' | fzf --height=40% --reverse --header="Select vault:")
+        
+        if [ -z "$VAULT" ]; then
+          echo "❌ No vault selected"
+          exit 1
+        fi
+        
+        echo "📦 Selected vault: $VAULT"
+        echo ""
+        
+        # Interactive item selection
+        echo "🔍 Items in $VAULT:"
+        ITEM=$(op item list --vault="$VAULT" --format=json | jq -r '.[] | "\(.title) (\(.category))"' | fzf --height=40% --reverse --header="Select item:")
+        
+        if [ -z "$ITEM" ]; then
+          echo "❌ No item selected"
+          exit 1
+        fi
+        
+        # Extract title from selection
+        ITEM_TITLE=$(echo "$ITEM" | sed 's/ ([^)]*)$//')
+        echo "🎯 Selected item: $ITEM_TITLE"
+        echo ""
+        
+        # Show item details
+        echo "📋 Item details:"
+        op item get "$ITEM_TITLE" --vault="$VAULT" --format=json | jq -r '
+          "Title: " + .title,
+          "Category: " + .category,
+          "Tags: " + (.tags // [] | join(", ")),
+          "",
+          "Fields:",
+          (.fields // [] | map("  " + .label + ": " + (.value // "[hidden]")) | join("\n"))
+        '
+        
+        echo ""
+        echo "🎯 Available actions:"
+        echo "  (c) Copy password to clipboard"
+        echo "  (u) Copy username to clipboard"  
+        echo "  (e) Export as environment variables"
+        echo "  (j) Show full JSON"
+        echo "  (q) Quit"
+        echo ""
+        read -p "Choice: " -n 1 -r
+        echo
+        
+        case $REPLY in
+          [Cc])
+            if op item get "$ITEM_TITLE" --vault="$VAULT" --fields password &>/dev/null; then
+              op item get "$ITEM_TITLE" --vault="$VAULT" --fields password | pbcopy
+              echo "✅ Password copied to clipboard"
+            else
+              echo "❌ No password field found"
+            fi
+            ;;
+          [Uu])
+            if op item get "$ITEM_TITLE" --vault="$VAULT" --fields username &>/dev/null; then
+              op item get "$ITEM_TITLE" --vault="$VAULT" --fields username | pbcopy
+              echo "✅ Username copied to clipboard"
+            else
+              echo "❌ No username field found"
+            fi
+            ;;
+          [Ee])
+            echo "# Export these environment variables:"
+            echo "# Source this file or copy the exports you need"
+            echo ""
+            op item get "$ITEM_TITLE" --vault="$VAULT" --format=json | jq -r '
+              .fields[] | select(.value != null and .value != "") | 
+              "export " + (.label | gsub("[^A-Za-z0-9_]"; "_") | ascii_upcase) + "=\"" + .value + "\""
+            '
+            ;;
+          [Jj])
+            echo "📄 Full JSON:"
+            op item get "$ITEM_TITLE" --vault="$VAULT" --format=json | jq .
+            ;;
+          *)
+            echo "👋 Goodbye!"
+            ;;
+        esac
+      '';
+      
+      # Export secrets as environment variables
+      op-env.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        VAULT="''${1:-}"
+        ITEM="''${2:-}"
+        
+        if [ -z "$VAULT" ] || [ -z "$ITEM" ]; then
+          echo "Usage: op-env <vault> <item>"
+          echo ""
+          echo "Export 1Password item fields as environment variables"
+          echo ""
+          echo "Examples:"
+          echo "  op-env \"Development\" \"API Keys\"        # Export all fields from API Keys item"
+          echo "  source <(op-env \"Development\" \"API Keys\") # Source directly into shell"
+          echo ""
+          echo "Available vaults:"
+          if op vault list &>/dev/null; then
+            op vault list --format=table
+          else
+            echo "❌ Not authenticated. Run 'op-login' first"
+          fi
+          exit 1
+        fi
+        
+        # Check authentication
+        if ! op vault list &>/dev/null; then
+          echo "❌ Not authenticated with 1Password"
+          echo "💡 Run 'op-login' first"
+          exit 1
+        fi
+        
+        echo "# 1Password environment variables from $VAULT/$ITEM"
+        echo "# Generated on $(date)"
+        echo ""
+        
+        # Export all fields as environment variables
+        op item get "$ITEM" --vault="$VAULT" --format=json | jq -r '
+          .fields[] | select(.value != null and .value != "") | 
+          "export " + (.label | gsub("[^A-Za-z0-9_]"; "_") | ascii_upcase) + "=\"" + .value + "\""
+        '
+      '';
+      
+      # Check 1Password status and connection
+      op-status.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        echo "🔐 1Password Status"
+        echo "=================="
+        
+        # Check if CLI is available
+        if ! command -v op &> /dev/null; then
+          echo "❌ 1Password CLI not found"
+          echo "💡 Make sure devenv is loaded: 'devenv shell'"
+          exit 1
+        fi
+        
+        echo "✅ 1Password CLI found: $(op --version)"
+        echo ""
+        
+        # Check authentication status
+        if op account list &>/dev/null; then
+          echo "✅ Authenticated accounts:"
+          op account list --format=table
+          echo ""
+          
+          # Check session status
+          if op vault list &>/dev/null; then
+            echo "✅ Active session"
+            echo ""
+            echo "📁 Available vaults:"
+            op vault list --format=table
+            echo ""
+            echo "🎯 Ready to use 1Password!"
+            echo "💡 Try: op-secrets (interactive browser)"
+          else
+            echo "⚠️ Authentication expired"
+            echo "💡 Run: op signin"
+          fi
+        else
+          echo "❌ Not signed in"
+          echo "💡 Run: op-login"
+        fi
+        
+        echo ""
+        echo "📚 Available commands:"
+        echo "  op-login      - Sign in to 1Password"
+        echo "  op-secrets    - Interactive secret browser"  
+        echo "  op-env        - Export secrets as env vars"
+        echo "  op-status     - This status check"
+      '';
+      
+      # Get specific secret (for scripting)
+      op-get.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        VAULT="''${1:-}"
+        ITEM="''${2:-}"  
+        FIELD="''${3:-password}"
+        
+        if [ -z "$VAULT" ] || [ -z "$ITEM" ]; then
+          echo "Usage: op-get <vault> <item> [field]"
+          echo ""
+          echo "Get specific field from 1Password item"
+          echo ""
+          echo "Examples:"
+          echo "  op-get \"Dev\" \"GitHub\" password     # Get password (default)"
+          echo "  op-get \"Dev\" \"GitHub\" username     # Get username"
+          echo "  op-get \"Dev\" \"API Keys\" \"api_key\"  # Get custom field"
+          echo ""
+          echo "💡 Use quotes around names with spaces"
+          exit 1
+        fi
+        
+        # Check authentication silently
+        if ! op vault list &>/dev/null; then
+          echo "❌ Not authenticated with 1Password" >&2
+          echo "💡 Run 'op-login' first" >&2
+          exit 1
+        fi
+        
+        # Get the field value
+        op item get "$ITEM" --vault="$VAULT" --fields="$FIELD" 2>/dev/null || {
+          echo "❌ Could not retrieve $FIELD from $VAULT/$ITEM" >&2
+          echo "💡 Check vault, item name, and field name" >&2
+          exit 1
+        }
+      '';
+
+      # ============================================
       # UTILITY FUNCTIONS
       # ============================================
       
@@ -1845,6 +2143,56 @@ PYTHON_SCRIPT
             echo "    chore/update-dependencies"
             ;;
           
+          1password|secrets|op)
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "     🔐 1Password Integration Guide"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "Setup & Authentication:"
+            echo "    op-login              - Sign in to 1Password (browser auth)"
+            echo "    1pass-login           - Alias for op-login"
+            echo "    op-status             - Check authentication and session status"
+            echo ""
+            echo "Interactive Usage:"
+            echo "    op-secrets            - Browse vaults and items interactively"
+            echo "                           Uses fzf for selection"
+            echo "                           Copy to clipboard, export vars, etc."
+            echo ""
+            echo "Scripting & Automation:"
+            echo "    op-get \"vault\" \"item\" [field]"
+            echo "                          - Get specific secret value"
+            echo "                          - Default field is 'password'"
+            echo "    op-env \"vault\" \"item\""
+            echo "                          - Export all fields as env variables"
+            echo "    source <(op-env \"Dev\" \"API Keys\")"
+            echo "                          - Source secrets directly into shell"
+            echo ""
+            echo "Common Workflows:"
+            echo ""
+            echo "    # First-time setup"
+            echo "    op-login"
+            echo ""
+            echo "    # Interactive browsing"
+            echo "    op-secrets"
+            echo ""
+            echo "    # Get API key for script"
+            echo "    API_KEY=\$(op-get \"Development\" \"GitHub\" \"api_key\")"
+            echo ""
+            echo "    # Load all development secrets"
+            echo "    source <(op-env \"Development\" \"Environment Variables\")"
+            echo ""
+            echo "Security Features:"
+            echo "    • Authenticated sessions with automatic expiry"
+            echo "    • No secrets stored in shell history"
+            echo "    • Integration with 1Password's security model"
+            echo "    • Works with existing 1Password accounts and vaults"
+            echo ""
+            echo "Integration with workflows:"
+            echo "    • Use in AI agent workflows for secure API access"
+            echo "    • Export secrets for CI/CD pipeline testing"
+            echo "    • Manage development environment secrets"
+            ;;
+          
           local|integration)
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "     🔀 Local Integration Workflow"
@@ -1920,6 +2268,13 @@ PYTHON_SCRIPT
             echo "    mcp-status                       - Check server status"
             echo "    mcp-start/stop                   - Manual control"
             echo ""
+            echo "🔐 1Password Integration:"
+            echo "    op-login / 1pass-login           - Sign in to 1Password"
+            echo "    op-status                        - Check authentication status"
+            echo "    op-secrets                       - Interactive secret browser"
+            echo "    op-env <vault> <item>           - Export secrets as env vars"
+            echo "    op-get <vault> <item> [field]   - Get specific secret value"
+            echo ""
             echo "🎨 Tools:"
             echo "    devflow                           - Launch visual TUI"
             echo "    gt-setup                       - Configure Git Town"
@@ -1929,6 +2284,7 @@ PYTHON_SCRIPT
             echo "    ? shipping                       - When/how to ship branches"
             echo "    ? naming                       - Branch naming rules"
             echo "    ? local                           - Local integration workflow"
+            echo "    ? 1password                       - 1Password integration & usage"
             echo ""
             echo "💡 Multi-Agent Workflow:"
             echo "    1. agent-start 101, 102, 103   - Start multiple agents"
@@ -2045,6 +2401,7 @@ PYTHON_SCRIPT
       echo "  AI Agents:   agent-start, agent-here, agent-status"
       echo "  Workflow:       issue-to-pr <issue#>"
       echo "  MCP:           mcp-start, mcp-status, mcp-stop"
+      echo "  1Password:   op-login, op-status, op-secrets, op-env, op-get"
       echo "  Stack:       stack-status, stack-test"
       echo "  TUI:           devflow"
       echo "  Setup:       gt-setup (configure Git Town)"
