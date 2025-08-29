@@ -1763,7 +1763,7 @@ PYTHON_SCRIPT
         # Context7 MCP
         if op item get "Context7 MCP" --vault="$VAULT" &>/dev/null; then
           echo "  • Context7 MCP credentials"
-          CONTEXT7_API_KEY=$(op item get "Context7 MCP" --vault="$VAULT" --fields="API_KEY" 2>/dev/null || echo "")
+          CONTEXT7_API_KEY=$(op item get "Context7 MCP" --vault="$VAULT" --fields="credential" 2>/dev/null || echo "")
         else
           echo "  ⚠️ Context7 MCP item not found in vault"
         fi
@@ -1771,7 +1771,7 @@ PYTHON_SCRIPT
         # Exa MCP (Web Search)
         if op item get "Exa MCP" --vault="$VAULT" &>/dev/null; then
           echo "  • Exa MCP credentials"
-          EXA_API_KEY=$(op item get "Exa MCP" --vault="$VAULT" --fields="API_KEY" 2>/dev/null || echo "")
+          EXA_API_KEY=$(op item get "Exa MCP" --vault="$VAULT" --fields="credential" 2>/dev/null || echo "")
         else
           echo "  ⚠️ Exa MCP item not found in vault"
         fi
@@ -1779,7 +1779,7 @@ PYTHON_SCRIPT
         # AI API Key (Single item for all AI services)
         if op item get "AI API Key" --vault="$VAULT" &>/dev/null; then
           echo "  • AI API Key"
-          AI_API_KEY=$(op item get "AI API Key" --vault="$VAULT" --fields="API_KEY" 2>/dev/null || echo "")
+          AI_API_KEY=$(op item get "AI API Key" --vault="$VAULT" --fields="credential" 2>/dev/null || echo "")
           # Set all AI service variables to the same key
           ANTHROPIC_API_KEY="$AI_API_KEY"
           OPENAI_API_KEY="$AI_API_KEY"
@@ -2603,6 +2603,19 @@ EOF
         fi
       fi
       
+      # Check direnv integration
+      if [ -f ".envrc" ]; then
+        if ! command -v direnv &>/dev/null; then
+          echo "⚠️  Warning: .envrc file exists but direnv is not installed!"
+          echo "   Install with: nix profile add nixpkgs#direnv"
+          echo "   Then add to ~/.zshrc: eval \"\$(direnv hook zsh)\""
+        elif ! direnv status 2>/dev/null | grep -q "Found RC allowed true"; then
+          echo "⚠️  Warning: direnv is installed but .envrc is not allowed!"
+          echo "   Run: direnv allow ."
+          echo "   This will auto-load the devenv shell when you cd into this directory"
+        fi
+      fi
+      
       # Set up Python virtual environment with uv
       if [ ! -d ".venv" ]; then
         echo "🐍 Creating Python virtual environment..."
@@ -2616,16 +2629,38 @@ EOF
         source .venv/bin/activate
       fi
       
+      # Check for required API keys FIRST - this is critical
+      if [ -z "''${ANTHROPIC_API_KEY:-}" ]; then
+        echo "⚠️  Warning: ANTHROPIC_API_KEY not set for AI features!"
+        echo "🔐 IMPORTANT: Set up your API keys with: secrets-setup"
+        echo "   This command will securely configure all API keys needed for AI agents."
+        echo ""
+      fi
+      
+      # Initialize if first run
+      if [ ! -d "worktrees" ]; then
+        echo "🔧 First run detected. Setting up project structure..."
+        echo "   Running: dev-setup"
+        dev-setup
+        echo "✅ Project structure initialized!"
+        echo ""
+        echo "🎯 Next steps:"
+        echo "   1. secrets-setup     - Configure API keys for AI features"
+        echo "   2. gt-setup          - Configure Git Town for branch management"
+        echo "   3. wt-new <branch>   - Create your first worktree"
+        echo ""
+      fi
+      
       echo "📚 Quick Reference:"
-      echo "  Worktrees:   wt-new, wt-list, wt-cd, wt-clean, wt-stack"
-      echo "  Git Town:       wt-sync-all, wt-ship, wt-park, wt-observe, wt-contribute, wt-prototype"
-      echo "  AI Agents:   agent-start, agent-here, agent-status"
-      echo "  Workflow:       issue-to-pr <issue#>"
-      echo "  MCP:           mcp-start, mcp-status, mcp-stop"
-      echo "  1Password:   op-login, op-status, op-secrets, op-env, op-get"
-      echo "  Stack:       stack-status, stack-test"
-      echo "  TUI:           devflow"
-      echo "  Setup:       gt-setup (configure Git Town)"
+      echo "  🔐 Setup:        dev-setup, secrets-setup, gt-setup"
+      echo "  📁 Worktrees:    wt-new, wt-list, wt-cd, wt-clean, wt-stack"
+      echo "  🌳 Git Town:     wt-sync-all, wt-ship, wt-park, wt-observe, wt-contribute, wt-prototype"
+      echo "  🤖 AI Agents:    agent-start, agent-here, agent-status"
+      echo "  🚀 Workflow:     issue-to-pr <issue#>"
+      echo "  🔌 MCP:          mcp-start, mcp-status, mcp-stop"
+      echo "  🔑 1Password:    op-login, op-status, op-secrets, op-env, op-get"
+      echo "  📊 Stack:        stack-status, stack-test"
+      echo "  🖥️  TUI:          devflow"
       echo ""
       echo "💡 Tips:"
       echo "  • Branch naming: feat/, fix/, test/, docs/, chore/, hotfix/, etc."
@@ -2634,17 +2669,6 @@ EOF
       echo "  • Run 'issue-to-pr 123' for complete workflow"
       echo "  • Check 'CLAUDE.md' for AI instructions"
       echo ""
-      
-      # Check for required API keys
-      if [ -z "''${ANTHROPIC_API_KEY:-}" ]; then
-        echo "⚠️  Warning: ANTHROPIC_API_KEY not set"
-      fi
-      
-      # Initialize if first run
-      if [ ! -d "worktrees" ]; then
-        echo "🔧 First run detected. Initializing..."
-        dev-setup
-      fi
       
       # Show current worktree status
       if command -v git &> /dev/null && git rev-parse --git-dir > /dev/null 2>&1; then
