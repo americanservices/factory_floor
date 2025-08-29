@@ -1,0 +1,20 @@
+# Devenv
+.devenv*
+devenv.local.nix
+
+# direnv
+.direnv
+
+# Factory Floor
+worktrees/
+.context/
+.mcp/
+.venv/
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+
+# Node.js
+node_modules/

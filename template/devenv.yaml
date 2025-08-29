@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://devenv.sh/devenv.schema.json
+inputs:
+  nixpkgs:
+    url: github:cachix/devenv-nixpkgs/rolling
+  factory-floor:
+    url: github:americanservices/factory_floor
+    # Or use local path during development:
+    # url: path:/Users/max/Documents/code/factory_floor
+  dagger:
+    url: github:dagger/nix
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+
+# Import factory-floor's devenv module
+imports:
+  - factory-floor
+
+# Allow unfree packages (for 1Password CLI)
+nixpkgs:
+  allowUnfree: true

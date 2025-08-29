@@ -1750,15 +1750,20 @@ PYTHON_SCRIPT
         echo "📦 Using vault: $VAULT"
         echo ""
         
+        # Initialize variables with empty defaults to avoid unbound variable errors
+        CONTEXT7_API_KEY=""
+        EXA_API_KEY=""
+        ANTHROPIC_API_KEY=""
+        OPENAI_API_KEY=""
+        GEMINI_API_KEY=""
+        
         # Export MCP server credentials
         echo "🔌 Setting up MCP server credentials..."
         
-        # Context7 MCP (Upstash)
+        # Context7 MCP
         if op item get "Context7 MCP" --vault="$VAULT" &>/dev/null; then
           echo "  • Context7 MCP credentials"
-          export UPSTASH_VECTOR_REST_URL=$(op item get "Context7 MCP" --vault="$VAULT" --fields="VECTOR_REST_URL" 2>/dev/null || echo "")
-          export UPSTASH_VECTOR_REST_TOKEN=$(op item get "Context7 MCP" --vault="$VAULT" --fields="VECTOR_REST_TOKEN" 2>/dev/null || echo "")
-          export CONTEXT7_API_KEY=$(op item get "Context7 MCP" --vault="$VAULT" --fields="CONTEXT7_API_KEY" 2>/dev/null || echo "")
+          CONTEXT7_API_KEY=$(op item get "Context7 MCP" --vault="$VAULT" --fields="API_KEY" 2>/dev/null || echo "")
         else
           echo "  ⚠️ Context7 MCP item not found in vault"
         fi
@@ -1766,19 +1771,21 @@ PYTHON_SCRIPT
         # Exa MCP (Web Search)
         if op item get "Exa MCP" --vault="$VAULT" &>/dev/null; then
           echo "  • Exa MCP credentials"
-          export EXA_API_KEY=$(op item get "Exa MCP" --vault="$VAULT" --fields="API_KEY" 2>/dev/null || echo "")
+          EXA_API_KEY=$(op item get "Exa MCP" --vault="$VAULT" --fields="API_KEY" 2>/dev/null || echo "")
         else
           echo "  ⚠️ Exa MCP item not found in vault"
         fi
         
-        # Zen MCP (Multi-model AI)
-        if op item get "AI API Keys" --vault="$VAULT" &>/dev/null; then
-          echo "  • AI API Keys for Zen MCP"
-          export ANTHROPIC_API_KEY=$(op item get "AI API Keys" --vault="$VAULT" --fields="ANTHROPIC_API_KEY" 2>/dev/null || echo "")
-          export OPENAI_API_KEY=$(op item get "AI API Keys" --vault="$VAULT" --fields="OPENAI_API_KEY" 2>/dev/null || echo "")
-          export GEMINI_API_KEY=$(op item get "AI API Keys" --vault="$VAULT" --fields="GEMINI_API_KEY" 2>/dev/null || echo "")
+        # AI API Key (Single item for all AI services)
+        if op item get "AI API Key" --vault="$VAULT" &>/dev/null; then
+          echo "  • AI API Key"
+          AI_API_KEY=$(op item get "AI API Key" --vault="$VAULT" --fields="API_KEY" 2>/dev/null || echo "")
+          # Set all AI service variables to the same key
+          ANTHROPIC_API_KEY="$AI_API_KEY"
+          OPENAI_API_KEY="$AI_API_KEY"
+          GEMINI_API_KEY="$AI_API_KEY"
         else
-          echo "  ⚠️ AI API Keys item not found in vault"
+          echo "  ⚠️ AI API Key item not found in vault"
         fi
         
         # Additional MCP servers can be added here
@@ -1799,15 +1806,13 @@ PYTHON_SCRIPT
 # Generated: $(date)
 # DO NOT COMMIT THIS FILE
 
-# Context7 MCP (Upstash)
-UPSTASH_VECTOR_REST_URL="$UPSTASH_VECTOR_REST_URL"
-UPSTASH_VECTOR_REST_TOKEN="$UPSTASH_VECTOR_REST_TOKEN"
+# Context7 MCP
 CONTEXT7_API_KEY="$CONTEXT7_API_KEY"
 
 # Exa MCP (Web Search)
 EXA_API_KEY="$EXA_API_KEY"
 
-# AI API Keys for Zen MCP
+# AI API Key (used for all AI services)
 ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
 OPENAI_API_KEY="$OPENAI_API_KEY"
 GEMINI_API_KEY="$GEMINI_API_KEY"
@@ -2354,22 +2359,17 @@ EOF
             echo ""
             echo "📦 Vault: Development (or your chosen vault)"
             echo ""
-            echo "1️⃣ Context7 MCP (Upstash documentation):"
-            echo "    • VECTOR_REST_URL    - Upstash Vector database URL"
-            echo "    • VECTOR_REST_TOKEN  - Upstash Vector auth token"
-            echo "    • CONTEXT7_API_KEY   - Optional, for better rate limits"
-            echo "    Get from: https://console.upstash.com/"
-            echo "              https://context7.com/dashboard"
+            echo "1️⃣ Context7 MCP (Documentation fetcher):"
+            echo "    • API_KEY            - Context7 API key"
+            echo "    Get from: https://context7.com/dashboard"
             echo ""
             echo "2️⃣ Exa MCP (Web search):"
             echo "    • API_KEY            - Exa API key for web search"
             echo "    Get from: https://dashboard.exa.ai/api-keys"
             echo ""
-            echo "3️⃣ AI API Keys (Multi-model Zen):"
-            echo "    • ANTHROPIC_API_KEY  - Claude API access"
-            echo "    • OPENAI_API_KEY     - OpenAI/GPT access"
-            echo "    • GEMINI_API_KEY     - Google Gemini access"
-            echo "    Get from: respective AI provider dashboards"
+            echo "3️⃣ AI API Key (Single key for all AI services):"
+            echo "    • API_KEY            - Used for Anthropic, OpenAI, and Gemini"
+            echo "    Get from: Your AI provider dashboard"
             echo ""
             echo "Setup Commands:"
             echo "    secrets-setup [env]  - Full setup (dev/staging/prod)"
@@ -2380,9 +2380,7 @@ EOF
             echo "       op item create --category='API Credential' \\"
             echo "         --vault='Development' \\"
             echo "         --title='Context7 MCP' \\"
-            echo "         VECTOR_REST_URL='...' \\"
-            echo "         VECTOR_REST_TOKEN='...' \\"
-            echo "         CONTEXT7_API_KEY='...'"
+            echo "         API_KEY='...'"
             echo ""
             echo "       op item create --category='API Credential' \\"
             echo "         --vault='Development' \\"
@@ -2399,7 +2397,7 @@ EOF
             echo "       mcp-start"
             echo ""
             echo "Available MCP Servers:"
-            echo "    • context7   - Documentation fetcher (Upstash)"
+            echo "    • context7   - Documentation fetcher"
             echo "    • exa        - Web search and research"
             echo "    • zen        - Multi-model AI collaboration"
             echo "    • playwright - Browser automation"
