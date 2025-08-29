@@ -1,10 +1,24 @@
 {
   "mcpServers": {
     "context7": {
-      "description": "Documentation fetcher and search",
+      "description": "Documentation fetcher and search - powered by Upstash",
       "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"],
-      "transport": "stdio"
+      "args": ["-y", "@upstash/context7-mcp", "--api-key", "${CONTEXT7_API_KEY}"],
+      "transport": "stdio",
+      "env": {
+        "UPSTASH_VECTOR_REST_URL": "${UPSTASH_VECTOR_REST_URL}",
+        "UPSTASH_VECTOR_REST_TOKEN": "${UPSTASH_VECTOR_REST_TOKEN}",
+        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
+      }
+    },
+    "exa": {
+      "description": "Web search and research - powered by Exa AI",
+      "command": "npx",
+      "args": ["-y", "exa-mcp-server"],
+      "transport": "stdio",
+      "env": {
+        "EXA_API_KEY": "${EXA_API_KEY}"
+      }
     },
     "playwright": {
       "description": "Browser automation for E2E testing",

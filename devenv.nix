@@ -15,6 +15,9 @@ in
           go.enable = false;    # Enable as needed
       };
 
+      # Allow unfree packages (required for 1Password CLI)
+      # Configure allowUnfree via devenv.yaml (see below)
+
     # Core packages
     packages = with pkgs; [
       # Version control
@@ -1692,6 +1695,155 @@ PYTHON_SCRIPT
       '';
       
       # ============================================
+      # SECRETS MANAGEMENT & 1PASSWORD INTEGRATION
+      # ============================================
+      
+      # Setup secrets from 1Password for MCP servers and other services
+      secrets-setup.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        ENV="''${1:-dev}"
+        
+        echo "🔐 Secrets Setup for environment: $ENV"
+        echo "══════════════════════════════════════════════"
+        
+        # Check if op is available
+        if ! command -v op &> /dev/null; then
+          echo "❌ 1Password CLI (op) not found"
+          echo "💡 Run: nix develop or devenv shell"
+          exit 1
+        fi
+        
+        # Check authentication
+        if ! op vault list &>/dev/null; then
+          echo "🔑 Not authenticated with 1Password"
+          echo "💡 Signing in..."
+          op signin
+          if [ $? -ne 0 ]; then
+            echo "❌ Failed to sign in to 1Password"
+            exit 1
+          fi
+        fi
+        
+        echo "✅ Authenticated with 1Password"
+        echo ""
+        
+        # Define vault and item names based on environment
+        case "$ENV" in
+          dev|development)
+            VAULT="Development"
+            ;;
+          prod|production)
+            VAULT="Production"
+            ;;
+          staging)
+            VAULT="Staging"
+            ;;
+          *)
+            echo "❌ Unknown environment: $ENV"
+            echo "💡 Valid environments: dev, staging, prod"
+            exit 1
+            ;;
+        esac
+        
+        echo "📦 Using vault: $VAULT"
+        echo ""
+        
+        # Export MCP server credentials
+        echo "🔌 Setting up MCP server credentials..."
+        
+        # Context7 MCP (Upstash)
+        if op item get "Context7 MCP" --vault="$VAULT" &>/dev/null; then
+          echo "  • Context7 MCP credentials"
+          export UPSTASH_VECTOR_REST_URL=$(op item get "Context7 MCP" --vault="$VAULT" --fields="VECTOR_REST_URL" 2>/dev/null || echo "")
+          export UPSTASH_VECTOR_REST_TOKEN=$(op item get "Context7 MCP" --vault="$VAULT" --fields="VECTOR_REST_TOKEN" 2>/dev/null || echo "")
+          export CONTEXT7_API_KEY=$(op item get "Context7 MCP" --vault="$VAULT" --fields="CONTEXT7_API_KEY" 2>/dev/null || echo "")
+        else
+          echo "  ⚠️ Context7 MCP item not found in vault"
+        fi
+        
+        # Exa MCP (Web Search)
+        if op item get "Exa MCP" --vault="$VAULT" &>/dev/null; then
+          echo "  • Exa MCP credentials"
+          export EXA_API_KEY=$(op item get "Exa MCP" --vault="$VAULT" --fields="API_KEY" 2>/dev/null || echo "")
+        else
+          echo "  ⚠️ Exa MCP item not found in vault"
+        fi
+        
+        # Zen MCP (Multi-model AI)
+        if op item get "AI API Keys" --vault="$VAULT" &>/dev/null; then
+          echo "  • AI API Keys for Zen MCP"
+          export ANTHROPIC_API_KEY=$(op item get "AI API Keys" --vault="$VAULT" --fields="ANTHROPIC_API_KEY" 2>/dev/null || echo "")
+          export OPENAI_API_KEY=$(op item get "AI API Keys" --vault="$VAULT" --fields="OPENAI_API_KEY" 2>/dev/null || echo "")
+          export GEMINI_API_KEY=$(op item get "AI API Keys" --vault="$VAULT" --fields="GEMINI_API_KEY" 2>/dev/null || echo "")
+        else
+          echo "  ⚠️ AI API Keys item not found in vault"
+        fi
+        
+        # Additional MCP servers can be added here
+        # Example:
+        # if op item get "Custom MCP" --vault="$VAULT" &>/dev/null; then
+        #   echo "  • Custom MCP credentials"
+        #   export CUSTOM_MCP_URL=$(op item get "Custom MCP" --vault="$VAULT" --fields="URL" 2>/dev/null || echo "")
+        #   export CUSTOM_MCP_TOKEN=$(op item get "Custom MCP" --vault="$VAULT" --fields="TOKEN" 2>/dev/null || echo "")
+        # fi
+        
+        echo ""
+        
+        # Write environment file for persistence
+        ENV_FILE=".env.$ENV"
+        echo "💾 Writing environment file: $ENV_FILE"
+        cat > "$ENV_FILE" <<EOF
+# MCP Server Credentials - $ENV environment
+# Generated: $(date)
+# DO NOT COMMIT THIS FILE
+
+# Context7 MCP (Upstash)
+UPSTASH_VECTOR_REST_URL="$UPSTASH_VECTOR_REST_URL"
+UPSTASH_VECTOR_REST_TOKEN="$UPSTASH_VECTOR_REST_TOKEN"
+CONTEXT7_API_KEY="$CONTEXT7_API_KEY"
+
+# Exa MCP (Web Search)
+EXA_API_KEY="$EXA_API_KEY"
+
+# AI API Keys for Zen MCP
+ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
+OPENAI_API_KEY="$OPENAI_API_KEY"
+GEMINI_API_KEY="$GEMINI_API_KEY"
+
+# Additional MCP servers can be configured here
+EOF
+        
+        # Update .gitignore if needed
+        if ! grep -q "^\.env\." .gitignore 2>/dev/null; then
+          echo ".env.*" >> .gitignore
+          echo "📝 Added .env.* to .gitignore"
+        fi
+        
+        echo ""
+        echo "✅ Secrets setup complete for $ENV environment!"
+        echo ""
+        echo "🎯 Next steps:"
+        echo "  1. Source the environment: source $ENV_FILE"
+        echo "  2. Start MCP servers: mcp-start"
+        echo "  3. Verify with: mcp-status"
+        echo ""
+        echo "💡 To use in a new shell:"
+        echo "     source $ENV_FILE"
+        echo ""
+        echo "🔒 Security notes:"
+        echo "  • Never commit $ENV_FILE"
+        echo "  • Secrets expire with 1Password session"
+        echo "  • Re-run this command to refresh"
+      '';
+      
+      # Quick alias for common dev setup
+      secrets-dev.exec = ''
+        exec secrets-setup dev
+      '';
+      
+      # ============================================
       # 1PASSWORD INTEGRATION
       # ============================================
       
@@ -2143,7 +2295,7 @@ PYTHON_SCRIPT
             echo "    chore/update-dependencies"
             ;;
           
-          1password|secrets|op)
+          1password|op)
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "     🔐 1Password Integration Guide"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -2191,6 +2343,73 @@ PYTHON_SCRIPT
             echo "    • Use in AI agent workflows for secure API access"
             echo "    • Export secrets for CI/CD pipeline testing"
             echo "    • Manage development environment secrets"
+            ;;
+          
+          secrets|mcp-secrets)
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "     🔌 MCP Server Secrets Setup"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "Required 1Password Items:"
+            echo ""
+            echo "📦 Vault: Development (or your chosen vault)"
+            echo ""
+            echo "1️⃣ Context7 MCP (Upstash documentation):"
+            echo "    • VECTOR_REST_URL    - Upstash Vector database URL"
+            echo "    • VECTOR_REST_TOKEN  - Upstash Vector auth token"
+            echo "    • CONTEXT7_API_KEY   - Optional, for better rate limits"
+            echo "    Get from: https://console.upstash.com/"
+            echo "              https://context7.com/dashboard"
+            echo ""
+            echo "2️⃣ Exa MCP (Web search):"
+            echo "    • API_KEY            - Exa API key for web search"
+            echo "    Get from: https://dashboard.exa.ai/api-keys"
+            echo ""
+            echo "3️⃣ AI API Keys (Multi-model Zen):"
+            echo "    • ANTHROPIC_API_KEY  - Claude API access"
+            echo "    • OPENAI_API_KEY     - OpenAI/GPT access"
+            echo "    • GEMINI_API_KEY     - Google Gemini access"
+            echo "    Get from: respective AI provider dashboards"
+            echo ""
+            echo "Setup Commands:"
+            echo "    secrets-setup [env]  - Full setup (dev/staging/prod)"
+            echo "    secrets-dev          - Quick dev environment setup"
+            echo ""
+            echo "Setup Workflow:"
+            echo "    1. Create items in 1Password:"
+            echo "       op item create --category='API Credential' \\"
+            echo "         --vault='Development' \\"
+            echo "         --title='Context7 MCP' \\"
+            echo "         VECTOR_REST_URL='...' \\"
+            echo "         VECTOR_REST_TOKEN='...' \\"
+            echo "         CONTEXT7_API_KEY='...'"
+            echo ""
+            echo "       op item create --category='API Credential' \\"
+            echo "         --vault='Development' \\"
+            echo "         --title='Exa MCP' \\"
+            echo "         API_KEY='...'"
+            echo ""
+            echo "    2. Run setup:"
+            echo "       secrets-setup dev"
+            echo ""
+            echo "    3. Source environment:"
+            echo "       source .env.dev"
+            echo ""
+            echo "    4. Start MCP servers:"
+            echo "       mcp-start"
+            echo ""
+            echo "Available MCP Servers:"
+            echo "    • context7   - Documentation fetcher (Upstash)"
+            echo "    • exa        - Web search and research"
+            echo "    • zen        - Multi-model AI collaboration"
+            echo "    • playwright - Browser automation"
+            echo "    • python     - Safe Python execution sandbox"
+            echo "    • sequential - Structured problem-solving"
+            echo ""
+            echo "Verification:"
+            echo "    mcp-status           - Check which servers are running"
+            echo "    op-status            - Check 1Password connection"
+            echo "    echo \$EXA_API_KEY    - Verify secret is loaded"
             ;;
           
           local|integration)
@@ -2267,6 +2486,8 @@ PYTHON_SCRIPT
             echo "🔌 MCP Servers:"
             echo "    mcp-status                       - Check server status"
             echo "    mcp-start/stop                   - Manual control"
+            echo "    secrets-setup [env]              - Setup MCP secrets from 1Password"
+            echo "    secrets-dev                      - Quick setup for dev environment"
             echo ""
             echo "🔐 1Password Integration:"
             echo "    op-login / 1pass-login           - Sign in to 1Password"
@@ -2274,6 +2495,7 @@ PYTHON_SCRIPT
             echo "    op-secrets                       - Interactive secret browser"
             echo "    op-env <vault> <item>           - Export secrets as env vars"
             echo "    op-get <vault> <item> [field]   - Get specific secret value"
+            echo "    secrets-setup [env]              - Setup all MCP server secrets"
             echo ""
             echo "🎨 Tools:"
             echo "    devflow                           - Launch visual TUI"
@@ -2285,6 +2507,7 @@ PYTHON_SCRIPT
             echo "    ? naming                       - Branch naming rules"
             echo "    ? local                           - Local integration workflow"
             echo "    ? 1password                       - 1Password integration & usage"
+            echo "    ? secrets                        - MCP server secrets setup"
             echo ""
             echo "💡 Multi-Agent Workflow:"
             echo "    1. agent-start 101, 102, 103   - Start multiple agents"

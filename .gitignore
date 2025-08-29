@@ -19,6 +19,7 @@ worktrees/
 
 # Environment variables
 .env
+.env.*
 
 # Python virtual environment
 .venv/
