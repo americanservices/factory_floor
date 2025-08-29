@@ -19,3 +19,9 @@ nixpkgs:
 # If you have more than one devenv you can merge them
 #imports:
 # - ./backend
+
+# SecretSpec configuration for managing API keys
+secretspec:
+  enable: true
+  provider: keyring  # Uses system keychain (recommended for local dev)
+  profile: default   # Profile from secretspec.toml

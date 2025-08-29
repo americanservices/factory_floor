@@ -12,11 +12,9 @@ in
           javascript.enable = true;
           typescript.enable = true;
           rust.enable = false;    # Enable as needed
-          go.enable = false;    # Enable as needed
+          go.enable = true;     # Enable for OpenCode dependency
+          go.package = pkgs.go_1_24; # OpenCode requires Go 1.24.x
       };
-
-      # Allow unfree packages (required for 1Password CLI)
-      # Configure allowUnfree via devenv.yaml (see below)
 
     # Core packages
     packages = with pkgs; [
@@ -37,17 +35,18 @@ in
       
       # AI/MCP tools
       nodejs_20
+      bun  # Required for OpenCode
+      deno  # Required for Python sandbox MCP server
       uv  # Fast Python package manager
       
       # Development utilities
       direnv
+      curl  # Required for OpenCode install script
+      secretspec  # Secure secret management
       
       # Text processing
       bat
       fd
-      
-      # Security & secret management
-      _1password  # 1Password CLI (op)
     ];
 
     # Git hooks configuration - disabled for now
@@ -1695,455 +1694,6 @@ PYTHON_SCRIPT
       '';
       
       # ============================================
-      # SECRETS MANAGEMENT & 1PASSWORD INTEGRATION
-      # ============================================
-      
-      # Setup secrets from 1Password for MCP servers and other services
-      secrets-setup.exec = ''
-        #!/usr/bin/env bash
-        set -euo pipefail
-        
-        ENV="''${1:-dev}"
-        
-        echo "🔐 Secrets Setup for environment: $ENV"
-        echo "══════════════════════════════════════════════"
-        
-        # Check if op is available
-        if ! command -v op &> /dev/null; then
-          echo "❌ 1Password CLI (op) not found"
-          echo "💡 Run: nix develop or devenv shell"
-          exit 1
-        fi
-        
-        # Check authentication
-        if ! op vault list &>/dev/null; then
-          echo "🔑 Not authenticated with 1Password"
-          echo "💡 Signing in..."
-          op signin
-          if [ $? -ne 0 ]; then
-            echo "❌ Failed to sign in to 1Password"
-            exit 1
-          fi
-        fi
-        
-        echo "✅ Authenticated with 1Password"
-        echo ""
-        
-        # Define vault and item names based on environment
-        case "$ENV" in
-          dev|development)
-            VAULT="Development"
-            ;;
-          prod|production)
-            VAULT="Production"
-            ;;
-          staging)
-            VAULT="Staging"
-            ;;
-          *)
-            echo "❌ Unknown environment: $ENV"
-            echo "💡 Valid environments: dev, staging, prod"
-            exit 1
-            ;;
-        esac
-        
-        echo "📦 Using vault: $VAULT"
-        echo ""
-        
-        # Initialize variables with empty defaults to avoid unbound variable errors
-        CONTEXT7_API_KEY=""
-        EXA_API_KEY=""
-        ANTHROPIC_API_KEY=""
-        OPENAI_API_KEY=""
-        GEMINI_API_KEY=""
-        
-        # Export MCP server credentials
-        echo "🔌 Setting up MCP server credentials..."
-        
-        # Context7 MCP
-        if op item get "Context7 MCP" --vault="$VAULT" &>/dev/null; then
-          echo "  • Context7 MCP credentials"
-          CONTEXT7_API_KEY=$(op item get "Context7 MCP" --vault="$VAULT" --fields="credential" 2>/dev/null || echo "")
-        else
-          echo "  ⚠️ Context7 MCP item not found in vault"
-        fi
-        
-        # Exa MCP (Web Search)
-        if op item get "Exa MCP" --vault="$VAULT" &>/dev/null; then
-          echo "  • Exa MCP credentials"
-          EXA_API_KEY=$(op item get "Exa MCP" --vault="$VAULT" --fields="credential" 2>/dev/null || echo "")
-        else
-          echo "  ⚠️ Exa MCP item not found in vault"
-        fi
-        
-        # AI API Key (Single item for all AI services)
-        if op item get "AI API Key" --vault="$VAULT" &>/dev/null; then
-          echo "  • AI API Key"
-          AI_API_KEY=$(op item get "AI API Key" --vault="$VAULT" --fields="credential" 2>/dev/null || echo "")
-          # Set all AI service variables to the same key
-          ANTHROPIC_API_KEY="$AI_API_KEY"
-          OPENAI_API_KEY="$AI_API_KEY"
-          GEMINI_API_KEY="$AI_API_KEY"
-        else
-          echo "  ⚠️ AI API Key item not found in vault"
-        fi
-        
-        # Additional MCP servers can be added here
-        # Example:
-        # if op item get "Custom MCP" --vault="$VAULT" &>/dev/null; then
-        #   echo "  • Custom MCP credentials"
-        #   export CUSTOM_MCP_URL=$(op item get "Custom MCP" --vault="$VAULT" --fields="URL" 2>/dev/null || echo "")
-        #   export CUSTOM_MCP_TOKEN=$(op item get "Custom MCP" --vault="$VAULT" --fields="TOKEN" 2>/dev/null || echo "")
-        # fi
-        
-        echo ""
-        
-        # Write environment file for persistence
-        ENV_FILE=".env.$ENV"
-        echo "💾 Writing environment file: $ENV_FILE"
-        cat > "$ENV_FILE" <<EOF
-# MCP Server Credentials - $ENV environment
-# Generated: $(date)
-# DO NOT COMMIT THIS FILE
-
-# Context7 MCP
-CONTEXT7_API_KEY="$CONTEXT7_API_KEY"
-
-# Exa MCP (Web Search)
-EXA_API_KEY="$EXA_API_KEY"
-
-# AI API Key (used for all AI services)
-ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"
-OPENAI_API_KEY="$OPENAI_API_KEY"
-GEMINI_API_KEY="$GEMINI_API_KEY"
-
-# Additional MCP servers can be configured here
-EOF
-        
-        # Update .gitignore if needed
-        if ! grep -q "^\.env\." .gitignore 2>/dev/null; then
-          echo ".env.*" >> .gitignore
-          echo "📝 Added .env.* to .gitignore"
-        fi
-        
-        echo ""
-        echo "✅ Secrets setup complete for $ENV environment!"
-        echo ""
-        echo "🎯 Next steps:"
-        echo "  1. Source the environment: source $ENV_FILE"
-        echo "  2. Start MCP servers: mcp-start"
-        echo "  3. Verify with: mcp-status"
-        echo ""
-        echo "💡 To use in a new shell:"
-        echo "     source $ENV_FILE"
-        echo ""
-        echo "🔒 Security notes:"
-        echo "  • Never commit $ENV_FILE"
-        echo "  • Secrets expire with 1Password session"
-        echo "  • Re-run this command to refresh"
-      '';
-      
-      # Quick alias for common dev setup
-      secrets-dev.exec = ''
-        exec secrets-setup dev
-      '';
-      
-      # ============================================
-      # 1PASSWORD INTEGRATION
-      # ============================================
-      
-      # Login to 1Password and setup session
-      op-login.exec = ''
-        #!/usr/bin/env bash
-        set -euo pipefail
-        
-        echo "🔐 1Password Login"
-        echo "=================="
-        
-        # Check if op is available
-        if ! command -v op &> /dev/null; then
-          echo "❌ 1Password CLI (op) not found"
-          echo "💡 Make sure devenv is loaded properly"
-          exit 1
-        fi
-        
-        # Check if already signed in
-        if op account list &>/dev/null; then
-          echo "✅ Already signed in to 1Password"
-          
-          # List accounts
-          echo ""
-          echo "📋 Available accounts:"
-          op account list --format=table
-          echo ""
-          
-          # Check session status
-          if op vault list &>/dev/null; then
-            echo "✅ Session is active"
-            echo "💡 Use 'op-secrets' to retrieve secrets"
-          else
-            echo "⚠️ Session expired. Please authenticate:"
-            op signin
-          fi
-        else
-          echo "🔑 Signing in to 1Password..."
-          echo "💡 This will open your browser for authentication"
-          op signin
-          
-          if [ $? -eq 0 ]; then
-            echo "✅ Successfully signed in!"
-            echo "📋 Available accounts:"
-            op account list --format=table
-          else
-            echo "❌ Sign-in failed"
-            exit 1
-          fi
-        fi
-        
-        echo ""
-        echo "🎯 Next steps:"
-        echo "  • op-secrets              - Interactive secret retrieval"
-        echo "  • op-env <vault> <item>    - Export secrets as env vars"
-        echo "  • op-status               - Check connection status"
-      '';
-      
-      # Alias for consistency  
-      "1pass-login".exec = ''
-        exec op-login "$@"
-      '';
-      
-      # Interactive secret browser and retrieval
-      op-secrets.exec = ''
-        #!/usr/bin/env bash
-        set -euo pipefail
-        
-        echo "🔍 1Password Secret Browser"
-        echo "==========================="
-        
-        # Check authentication
-        if ! op vault list &>/dev/null; then
-          echo "❌ Not authenticated with 1Password"
-          echo "💡 Run 'op-login' first"
-          exit 1
-        fi
-        
-        # Interactive vault selection
-        echo "📁 Available vaults:"
-        VAULT=$(op vault list --format=json | jq -r '.[].name' | fzf --height=40% --reverse --header="Select vault:")
-        
-        if [ -z "$VAULT" ]; then
-          echo "❌ No vault selected"
-          exit 1
-        fi
-        
-        echo "📦 Selected vault: $VAULT"
-        echo ""
-        
-        # Interactive item selection
-        echo "🔍 Items in $VAULT:"
-        ITEM=$(op item list --vault="$VAULT" --format=json | jq -r '.[] | "\(.title) (\(.category))"' | fzf --height=40% --reverse --header="Select item:")
-        
-        if [ -z "$ITEM" ]; then
-          echo "❌ No item selected"
-          exit 1
-        fi
-        
-        # Extract title from selection
-        ITEM_TITLE=$(echo "$ITEM" | sed 's/ ([^)]*)$//')
-        echo "🎯 Selected item: $ITEM_TITLE"
-        echo ""
-        
-        # Show item details
-        echo "📋 Item details:"
-        op item get "$ITEM_TITLE" --vault="$VAULT" --format=json | jq -r '
-          "Title: " + .title,
-          "Category: " + .category,
-          "Tags: " + (.tags // [] | join(", ")),
-          "",
-          "Fields:",
-          (.fields // [] | map("  " + .label + ": " + (.value // "[hidden]")) | join("\n"))
-        '
-        
-        echo ""
-        echo "🎯 Available actions:"
-        echo "  (c) Copy password to clipboard"
-        echo "  (u) Copy username to clipboard"  
-        echo "  (e) Export as environment variables"
-        echo "  (j) Show full JSON"
-        echo "  (q) Quit"
-        echo ""
-        read -p "Choice: " -n 1 -r
-        echo
-        
-        case $REPLY in
-          [Cc])
-            if op item get "$ITEM_TITLE" --vault="$VAULT" --fields password &>/dev/null; then
-              op item get "$ITEM_TITLE" --vault="$VAULT" --fields password | pbcopy
-              echo "✅ Password copied to clipboard"
-            else
-              echo "❌ No password field found"
-            fi
-            ;;
-          [Uu])
-            if op item get "$ITEM_TITLE" --vault="$VAULT" --fields username &>/dev/null; then
-              op item get "$ITEM_TITLE" --vault="$VAULT" --fields username | pbcopy
-              echo "✅ Username copied to clipboard"
-            else
-              echo "❌ No username field found"
-            fi
-            ;;
-          [Ee])
-            echo "# Export these environment variables:"
-            echo "# Source this file or copy the exports you need"
-            echo ""
-            op item get "$ITEM_TITLE" --vault="$VAULT" --format=json | jq -r '
-              .fields[] | select(.value != null and .value != "") | 
-              "export " + (.label | gsub("[^A-Za-z0-9_]"; "_") | ascii_upcase) + "=\"" + .value + "\""
-            '
-            ;;
-          [Jj])
-            echo "📄 Full JSON:"
-            op item get "$ITEM_TITLE" --vault="$VAULT" --format=json | jq .
-            ;;
-          *)
-            echo "👋 Goodbye!"
-            ;;
-        esac
-      '';
-      
-      # Export secrets as environment variables
-      op-env.exec = ''
-        #!/usr/bin/env bash
-        set -euo pipefail
-        
-        VAULT="''${1:-}"
-        ITEM="''${2:-}"
-        
-        if [ -z "$VAULT" ] || [ -z "$ITEM" ]; then
-          echo "Usage: op-env <vault> <item>"
-          echo ""
-          echo "Export 1Password item fields as environment variables"
-          echo ""
-          echo "Examples:"
-          echo "  op-env \"Development\" \"API Keys\"        # Export all fields from API Keys item"
-          echo "  source <(op-env \"Development\" \"API Keys\") # Source directly into shell"
-          echo ""
-          echo "Available vaults:"
-          if op vault list &>/dev/null; then
-            op vault list --format=table
-          else
-            echo "❌ Not authenticated. Run 'op-login' first"
-          fi
-          exit 1
-        fi
-        
-        # Check authentication
-        if ! op vault list &>/dev/null; then
-          echo "❌ Not authenticated with 1Password"
-          echo "💡 Run 'op-login' first"
-          exit 1
-        fi
-        
-        echo "# 1Password environment variables from $VAULT/$ITEM"
-        echo "# Generated on $(date)"
-        echo ""
-        
-        # Export all fields as environment variables
-        op item get "$ITEM" --vault="$VAULT" --format=json | jq -r '
-          .fields[] | select(.value != null and .value != "") | 
-          "export " + (.label | gsub("[^A-Za-z0-9_]"; "_") | ascii_upcase) + "=\"" + .value + "\""
-        '
-      '';
-      
-      # Check 1Password status and connection
-      op-status.exec = ''
-        #!/usr/bin/env bash
-        set -euo pipefail
-        
-        echo "🔐 1Password Status"
-        echo "=================="
-        
-        # Check if CLI is available
-        if ! command -v op &> /dev/null; then
-          echo "❌ 1Password CLI not found"
-          echo "💡 Make sure devenv is loaded: 'devenv shell'"
-          exit 1
-        fi
-        
-        echo "✅ 1Password CLI found: $(op --version)"
-        echo ""
-        
-        # Check authentication status
-        if op account list &>/dev/null; then
-          echo "✅ Authenticated accounts:"
-          op account list --format=table
-          echo ""
-          
-          # Check session status
-          if op vault list &>/dev/null; then
-            echo "✅ Active session"
-            echo ""
-            echo "📁 Available vaults:"
-            op vault list --format=table
-            echo ""
-            echo "🎯 Ready to use 1Password!"
-            echo "💡 Try: op-secrets (interactive browser)"
-          else
-            echo "⚠️ Authentication expired"
-            echo "💡 Run: op signin"
-          fi
-        else
-          echo "❌ Not signed in"
-          echo "💡 Run: op-login"
-        fi
-        
-        echo ""
-        echo "📚 Available commands:"
-        echo "  op-login      - Sign in to 1Password"
-        echo "  op-secrets    - Interactive secret browser"  
-        echo "  op-env        - Export secrets as env vars"
-        echo "  op-status     - This status check"
-      '';
-      
-      # Get specific secret (for scripting)
-      op-get.exec = ''
-        #!/usr/bin/env bash
-        set -euo pipefail
-        
-        VAULT="''${1:-}"
-        ITEM="''${2:-}"  
-        FIELD="''${3:-password}"
-        
-        if [ -z "$VAULT" ] || [ -z "$ITEM" ]; then
-          echo "Usage: op-get <vault> <item> [field]"
-          echo ""
-          echo "Get specific field from 1Password item"
-          echo ""
-          echo "Examples:"
-          echo "  op-get \"Dev\" \"GitHub\" password     # Get password (default)"
-          echo "  op-get \"Dev\" \"GitHub\" username     # Get username"
-          echo "  op-get \"Dev\" \"API Keys\" \"api_key\"  # Get custom field"
-          echo ""
-          echo "💡 Use quotes around names with spaces"
-          exit 1
-        fi
-        
-        # Check authentication silently
-        if ! op vault list &>/dev/null; then
-          echo "❌ Not authenticated with 1Password" >&2
-          echo "💡 Run 'op-login' first" >&2
-          exit 1
-        fi
-        
-        # Get the field value
-        op item get "$ITEM" --vault="$VAULT" --fields="$FIELD" 2>/dev/null || {
-          echo "❌ Could not retrieve $FIELD from $VAULT/$ITEM" >&2
-          echo "💡 Check vault, item name, and field name" >&2
-          exit 1
-        }
-      '';
-
-      # ============================================
       # UTILITY FUNCTIONS
       # ============================================
       
@@ -2300,116 +1850,6 @@ EOF
             echo "    chore/update-dependencies"
             ;;
           
-          1password|op)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "     🔐 1Password Integration Guide"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            echo "Setup & Authentication:"
-            echo "    op-login              - Sign in to 1Password (browser auth)"
-            echo "    1pass-login           - Alias for op-login"
-            echo "    op-status             - Check authentication and session status"
-            echo ""
-            echo "Interactive Usage:"
-            echo "    op-secrets            - Browse vaults and items interactively"
-            echo "                           Uses fzf for selection"
-            echo "                           Copy to clipboard, export vars, etc."
-            echo ""
-            echo "Scripting & Automation:"
-            echo "    op-get \"vault\" \"item\" [field]"
-            echo "                          - Get specific secret value"
-            echo "                          - Default field is 'password'"
-            echo "    op-env \"vault\" \"item\""
-            echo "                          - Export all fields as env variables"
-            echo "    source <(op-env \"Dev\" \"API Keys\")"
-            echo "                          - Source secrets directly into shell"
-            echo ""
-            echo "Common Workflows:"
-            echo ""
-            echo "    # First-time setup"
-            echo "    op-login"
-            echo ""
-            echo "    # Interactive browsing"
-            echo "    op-secrets"
-            echo ""
-            echo "    # Get API key for script"
-            echo "    API_KEY=\$(op-get \"Development\" \"GitHub\" \"api_key\")"
-            echo ""
-            echo "    # Load all development secrets"
-            echo "    source <(op-env \"Development\" \"Environment Variables\")"
-            echo ""
-            echo "Security Features:"
-            echo "    • Authenticated sessions with automatic expiry"
-            echo "    • No secrets stored in shell history"
-            echo "    • Integration with 1Password's security model"
-            echo "    • Works with existing 1Password accounts and vaults"
-            echo ""
-            echo "Integration with workflows:"
-            echo "    • Use in AI agent workflows for secure API access"
-            echo "    • Export secrets for CI/CD pipeline testing"
-            echo "    • Manage development environment secrets"
-            ;;
-          
-          secrets|mcp-secrets)
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "     🔌 MCP Server Secrets Setup"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            echo "Required 1Password Items:"
-            echo ""
-            echo "📦 Vault: Development (or your chosen vault)"
-            echo ""
-            echo "1️⃣ Context7 MCP (Documentation fetcher):"
-            echo "    • API_KEY            - Context7 API key"
-            echo "    Get from: https://context7.com/dashboard"
-            echo ""
-            echo "2️⃣ Exa MCP (Web search):"
-            echo "    • API_KEY            - Exa API key for web search"
-            echo "    Get from: https://dashboard.exa.ai/api-keys"
-            echo ""
-            echo "3️⃣ AI API Key (Single key for all AI services):"
-            echo "    • API_KEY            - Used for Anthropic, OpenAI, and Gemini"
-            echo "    Get from: Your AI provider dashboard"
-            echo ""
-            echo "Setup Commands:"
-            echo "    secrets-setup [env]  - Full setup (dev/staging/prod)"
-            echo "    secrets-dev          - Quick dev environment setup"
-            echo ""
-            echo "Setup Workflow:"
-            echo "    1. Create items in 1Password:"
-            echo "       op item create --category='API Credential' \\"
-            echo "         --vault='Development' \\"
-            echo "         --title='Context7 MCP' \\"
-            echo "         API_KEY='...'"
-            echo ""
-            echo "       op item create --category='API Credential' \\"
-            echo "         --vault='Development' \\"
-            echo "         --title='Exa MCP' \\"
-            echo "         API_KEY='...'"
-            echo ""
-            echo "    2. Run setup:"
-            echo "       secrets-setup dev"
-            echo ""
-            echo "    3. Source environment:"
-            echo "       source .env.dev"
-            echo ""
-            echo "    4. Start MCP servers:"
-            echo "       mcp-start"
-            echo ""
-            echo "Available MCP Servers:"
-            echo "    • context7   - Documentation fetcher"
-            echo "    • exa        - Web search and research"
-            echo "    • zen        - Multi-model AI collaboration"
-            echo "    • playwright - Browser automation"
-            echo "    • python     - Safe Python execution sandbox"
-            echo "    • sequential - Structured problem-solving"
-            echo ""
-            echo "Verification:"
-            echo "    mcp-status           - Check which servers are running"
-            echo "    op-status            - Check 1Password connection"
-            echo "    echo \$EXA_API_KEY    - Verify secret is loaded"
-            ;;
-          
           local|integration)
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "     🔀 Local Integration Workflow"
@@ -2484,16 +1924,6 @@ EOF
             echo "🔌 MCP Servers:"
             echo "    mcp-status                       - Check server status"
             echo "    mcp-start/stop                   - Manual control"
-            echo "    secrets-setup [env]              - Setup MCP secrets from 1Password"
-            echo "    secrets-dev                      - Quick setup for dev environment"
-            echo ""
-            echo "🔐 1Password Integration:"
-            echo "    op-login / 1pass-login           - Sign in to 1Password"
-            echo "    op-status                        - Check authentication status"
-            echo "    op-secrets                       - Interactive secret browser"
-            echo "    op-env <vault> <item>           - Export secrets as env vars"
-            echo "    op-get <vault> <item> [field]   - Get specific secret value"
-            echo "    secrets-setup [env]              - Setup all MCP server secrets"
             echo ""
             echo "🎨 Tools:"
             echo "    devflow                           - Launch visual TUI"
@@ -2504,8 +1934,6 @@ EOF
             echo "    ? shipping                       - When/how to ship branches"
             echo "    ? naming                       - Branch naming rules"
             echo "    ? local                           - Local integration workflow"
-            echo "    ? 1password                       - 1Password integration & usage"
-            echo "    ? secrets                        - MCP server secrets setup"
             echo ""
             echo "💡 Multi-Agent Workflow:"
             echo "    1. agent-start 101, 102, 103   - Start multiple agents"
@@ -2525,6 +1953,9 @@ EOF
       WORKTREE_BASE = "worktrees";
       FACTORY_FLOOR_ROOT = builtins.toString ./.;
       
+      # OpenCode configuration - include all possible install locations
+      PATH = "$HOME/.opencode/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$PATH";
+      
       # MCP configuration  
       MCP_CONFIG_PATH = ".mcp/config.json";
       
@@ -2538,7 +1969,15 @@ EOF
       CLAUDE_CONTEXT_DIR = ".context";
       
       # Development
-      EDITOR = "''${EDITOR:-vim}";
+      EDITOR = "\${EDITOR:-vim}";
+      
+      # API Keys from SecretSpec (will be injected automatically)
+      # These environment variables will be populated from secretspec.toml
+      # when entering the devenv shell with SecretSpec enabled
+      # SecretSpec will inject these automatically, we just pass them through
+      OPENAI_API_KEY = "\${OPENAI_API_KEY:-}";
+      EXA_API_KEY = "\${EXA_API_KEY:-}";
+      CONTEXT7_API_KEY = "\${CONTEXT7_API_KEY:-}";
     };
 
     # Services - commented out for now, using git/filesystem for state
@@ -2603,19 +2042,6 @@ EOF
         fi
       fi
       
-      # Check direnv integration
-      if [ -f ".envrc" ]; then
-        if ! command -v direnv &>/dev/null; then
-          echo "⚠️  Warning: .envrc file exists but direnv is not installed!"
-          echo "   Install with: nix profile add nixpkgs#direnv"
-          echo "   Then add to ~/.zshrc: eval \"\$(direnv hook zsh)\""
-        elif ! direnv status 2>/dev/null | grep -q "Found RC allowed true"; then
-          echo "⚠️  Warning: direnv is installed but .envrc is not allowed!"
-          echo "   Run: direnv allow ."
-          echo "   This will auto-load the devenv shell when you cd into this directory"
-        fi
-      fi
-      
       # Set up Python virtual environment with uv
       if [ ! -d ".venv" ]; then
         echo "🐍 Creating Python virtual environment..."
@@ -2629,38 +2055,49 @@ EOF
         source .venv/bin/activate
       fi
       
-      # Check for required API keys FIRST - this is critical
-      if [ -z "''${ANTHROPIC_API_KEY:-}" ]; then
-        echo "⚠️  Warning: ANTHROPIC_API_KEY not set for AI features!"
-        echo "🔐 IMPORTANT: Set up your API keys with: secrets-setup"
-        echo "   This command will securely configure all API keys needed for AI agents."
-        echo ""
-      fi
-      
-      # Initialize if first run
-      if [ ! -d "worktrees" ]; then
-        echo "🔧 First run detected. Setting up project structure..."
-        echo "   Running: dev-setup"
-        dev-setup
-        echo "✅ Project structure initialized!"
-        echo ""
-        echo "🎯 Next steps:"
-        echo "   1. secrets-setup     - Configure API keys for AI features"
-        echo "   2. gt-setup          - Configure Git Town for branch management"
-        echo "   3. wt-new <branch>   - Create your first worktree"
-        echo ""
+      # Install OpenCode if not present (check after PATH is set)
+      if ! command -v opencode &> /dev/null; then
+        echo "🤖 Installing OpenCode AI coding agent..."
+        
+        # Set up directories and npm configuration
+        mkdir -p "$HOME/.npm-global/bin" "$HOME/.npm-global/lib" "$HOME/.opencode/bin"
+        export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+        export BUN_INSTALL="$HOME/.bun"
+        
+        # Try npm first (most reliable and quiet)
+        if command -v npm &> /dev/null; then
+          echo "📦 Installing via npm..."
+          if npm install -g opencode-ai --silent 2>/dev/null; then
+            echo "✅ OpenCode installed successfully via npm"
+          elif command -v curl &> /dev/null; then
+            # Fallback to install script, but suppress its output
+            echo "📦 Trying official installer..."
+            if curl -fsSL https://opencode.ai/install 2>/dev/null | bash >/dev/null 2>&1; then
+              echo "✅ OpenCode installed successfully"
+            else
+              echo "⚠️  Installation failed - please install manually"
+              echo "   Run: brew install sst/tap/opencode"
+            fi
+          else
+            echo "⚠️  Installation failed - please install manually"
+            echo "   Run: brew install sst/tap/opencode"
+          fi
+        else
+          echo "⚠️  npm not available - please install manually"
+          echo "   Run: brew install sst/tap/opencode"
+        fi
       fi
       
       echo "📚 Quick Reference:"
-      echo "  🔐 Setup:        dev-setup, secrets-setup, gt-setup"
-      echo "  📁 Worktrees:    wt-new, wt-list, wt-cd, wt-clean, wt-stack"
-      echo "  🌳 Git Town:     wt-sync-all, wt-ship, wt-park, wt-observe, wt-contribute, wt-prototype"
-      echo "  🤖 AI Agents:    agent-start, agent-here, agent-status"
-      echo "  🚀 Workflow:     issue-to-pr <issue#>"
-      echo "  🔌 MCP:          mcp-start, mcp-status, mcp-stop"
-      echo "  🔑 1Password:    op-login, op-status, op-secrets, op-env, op-get"
-      echo "  📊 Stack:        stack-status, stack-test"
-      echo "  🖥️  TUI:          devflow"
+      echo "  Worktrees:   wt-new, wt-list, wt-cd, wt-clean, wt-stack"
+      echo "  Git Town:       wt-sync-all, wt-ship, wt-park, wt-observe, wt-contribute, wt-prototype"
+      echo "  AI Agents:   agent-start, agent-here, agent-status"
+      echo "  OpenCode:       opencode (AI coding agent)"
+      echo "  Workflow:       issue-to-pr <issue#>"
+      echo "  MCP:           mcp-start, mcp-status, mcp-stop"
+      echo "  Stack:       stack-status, stack-test"
+      echo "  TUI:           devflow"
+      echo "  Setup:       gt-setup (configure Git Town)"
       echo ""
       echo "💡 Tips:"
       echo "  • Branch naming: feat/, fix/, test/, docs/, chore/, hotfix/, etc."
@@ -2669,6 +2106,17 @@ EOF
       echo "  • Run 'issue-to-pr 123' for complete workflow"
       echo "  • Check 'CLAUDE.md' for AI instructions"
       echo ""
+      
+      # Check for required API keys
+      if [ -z "''${OPENAI_API_KEY:-}" ]; then
+        echo "⚠️  Warning: OPENAI_API_KEY not set (required for OpenCode)"
+      fi
+      
+      # Initialize if first run
+      if [ ! -d "worktrees" ]; then
+        echo "🔧 First run detected. Initializing..."
+        dev-setup
+      fi
       
       # Show current worktree status
       if command -v git &> /dev/null && git rev-parse --git-dir > /dev/null 2>&1; then
