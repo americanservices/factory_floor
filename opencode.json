@@ -1,10 +1,23 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "type": "openai",
-    "base_url": "https://api.openpipe.ai/api/v1",
-    "api_key_env": "OPENAI_API_KEY"
+    "openpipe": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OpenPipe",
+      "options": {
+        "baseURL": "https://api.openpipe.ai/api/v1",
+        "apiKey": "{env:OPENAI_API_KEY}"
+      },
+      "models": {
+        "anthropic:claude-opus-4-1-20250805": {
+          "name": "Claude Opus 4.1"
+        },
+        "anthropic:claude-sonnet-4-20250514": {
+          "name": "Claude Sonnet 4"
+        }
+      }
+    }
   },
-  "model": "claude-opus-4-1-20250805",
-  "small_model": "claude-sonnet-4-20250514"
+  "model": "openpipe/anthropic:claude-opus-4-1-20250805",
+  "small_model": "openpipe/anthropic:claude-sonnet-4-20250514"
 }

@@ -43,6 +43,7 @@ in
       direnv
       curl  # Required for OpenCode install script
       secretspec  # Secure secret management
+      _1password  # 1Password CLI for secret injection
       
       # Text processing
       bat
@@ -1697,6 +1698,69 @@ PYTHON_SCRIPT
       # UTILITY FUNCTIONS
       # ============================================
       
+      # OpenCode with secrets injected
+      opencode-dev.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        echo "🤖 Starting OpenCode with secrets..."
+        
+        # Check if op is available
+        if ! command -v op &> /dev/null; then
+          echo "❌ 1Password CLI not found"
+          echo "💡 Re-enter devenv shell to install it"
+          exit 1
+        fi
+        
+        # Check if signed in to 1Password
+        if ! op vault list &>/dev/null 2>&1; then
+          echo "🔑 Not signed in to 1Password. Signing in..."
+          eval $(op signin)
+        fi
+        
+        # Run OpenCode with secrets injected via SecretSpec
+        echo "🔐 Injecting secrets and starting OpenCode..."
+        secretspec run -- opencode "$@"
+      '';
+      
+      # Quick development secrets setup
+      secrets-dev.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        echo "🔐 Setting up development secrets from 1Password..."
+        echo "================================================="
+        
+        # Check if op is available
+        if ! command -v op &> /dev/null; then
+          echo "❌ 1Password CLI not found"
+          echo "💡 Re-enter devenv shell to install it"
+          exit 1
+        fi
+        
+        # Check if signed in to 1Password
+        if ! op vault list &>/dev/null 2>&1; then
+          echo "🔑 Not signed in to 1Password. Signing in..."
+          eval $(op signin)
+        fi
+        
+        # Check if secretspec is configured
+        if ! secretspec config test &>/dev/null 2>&1; then
+          echo "⚙️  Configuring SecretSpec..."
+          secretspec config init
+        fi
+        
+        echo ""
+        echo "✅ Development secrets ready!"
+        echo ""
+        echo "📝 Next steps:"
+        echo "  1. Run 'opencode-dev' to start OpenCode with secrets"
+        echo "  2. Or use 'secretspec run -- <command>' for any command"
+        echo ""
+        echo "🔍 To verify secrets are loaded:"
+        echo "  secretspec run -- env | grep API_KEY"
+      '';
+      
       dev-setup.exec = ''
         #!/usr/bin/env bash
         set -euo pipefail
@@ -2055,6 +2119,9 @@ PYTHON_SCRIPT
         source .venv/bin/activate
       fi
       
+      # Ensure OpenCode paths are in PATH
+      export PATH="$HOME/.opencode/bin:$HOME/.npm-global/bin:$HOME/.bun/bin:$PATH"
+      
       # Install OpenCode if not present (check after PATH is set)
       if ! command -v opencode &> /dev/null; then
         echo "🤖 Installing OpenCode AI coding agent..."
@@ -2069,11 +2136,17 @@ PYTHON_SCRIPT
           echo "📦 Installing via npm..."
           if npm install -g opencode-ai --silent 2>/dev/null; then
             echo "✅ OpenCode installed successfully via npm"
+            # Refresh PATH to include newly installed OpenCode
+            export PATH="$HOME/.npm-global/bin:$PATH"
+            hash -r  # Reset command cache
           elif command -v curl &> /dev/null; then
             # Fallback to install script, but suppress its output
             echo "📦 Trying official installer..."
             if curl -fsSL https://opencode.ai/install 2>/dev/null | bash >/dev/null 2>&1; then
               echo "✅ OpenCode installed successfully"
+              # Refresh PATH for installer location
+              export PATH="$HOME/.opencode/bin:$PATH"
+              hash -r  # Reset command cache
             else
               echo "⚠️  Installation failed - please install manually"
               echo "   Run: brew install sst/tap/opencode"
@@ -2086,13 +2159,15 @@ PYTHON_SCRIPT
           echo "⚠️  npm not available - please install manually"
           echo "   Run: brew install sst/tap/opencode"
         fi
+      else
+        echo "✅ OpenCode is already installed"
       fi
       
       echo "📚 Quick Reference:"
       echo "  Worktrees:   wt-new, wt-list, wt-cd, wt-clean, wt-stack"
       echo "  Git Town:       wt-sync-all, wt-ship, wt-park, wt-observe, wt-contribute, wt-prototype"
       echo "  AI Agents:   agent-start, agent-here, agent-status"
-      echo "  OpenCode:       opencode (AI coding agent)"
+      echo "  OpenCode:       opencode-dev (with secrets), opencode (without)"
       echo "  Workflow:       issue-to-pr <issue#>"
       echo "  MCP:           mcp-start, mcp-status, mcp-stop"
       echo "  Stack:       stack-status, stack-test"

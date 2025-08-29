@@ -377,6 +377,47 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 4. **Push** to your fork
 5. **Open** a Pull Request
 
+## ❓ Frequently Asked Questions
+
+### Secret Management Issues
+
+**Q: I'm getting "secret not found" errors even though my API keys are in 1Password**
+
+A: SecretSpec looks for items with specific titles in your vault. If you have existing 1Password items with different names (like "Exa MCP" instead of "EXA_API_KEY"), manually set the secret to create the properly named item:
+
+```bash
+# This will create/update the item with the correct title
+secretspec set EXA_API_KEY
+# Enter your API key when prompted
+
+# Or copy from existing item
+op item get "Exa MCP" --field credential | secretspec set EXA_API_KEY --stdin
+```
+
+**Q: SecretSpec says I'm not authenticated to 1Password**
+
+A: Make sure you're signed in to 1Password CLI:
+
+```bash
+# Sign in (will prompt for password/biometrics)
+eval $(op signin)
+
+# Verify you're signed in
+op whoami
+```
+
+**Q: How do I check which secrets are configured?**
+
+A: Use the check command to see the status:
+
+```bash
+secretspec check  # Shows which required secrets are missing
+```
+
+**Q: Where are my secrets stored?**
+
+A: Secrets are stored in your 1Password "development" vault (configured in `~/.config/secretspec/config.toml`). The items are named using the format `secretspec/{project}/{profile}/{key}` (e.g., `secretspec/factory-floor/development/OPENAI_API_KEY`).
+
 ## 📖 Documentation
 
 - [Workflow Patterns](docs/workflows.md) - Common development workflows
