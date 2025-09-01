@@ -1,23 +1,108 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "exa": {
+      "type": "local",
+      "command": ["npx", "-y", "exa-mcp-server"],
+      "enabled": true,
+      "environment": {
+        "EXA_API_KEY": "{env:EXA_API_KEY}"
+      }
+    },
+    "exa-remote": {
+      "type": "remote",
+      "url": "https://mcp.exa.ai/mcp",
+      "enabled": false,
+      "headers": {
+        "Authorization": "Bearer {env:EXA_API_KEY}"
+      }
+    },
+    "context7": {
+      "type": "local",
+      "command": ["npx", "-y", "@upstash/context7-mcp"],
+      "enabled": true,
+      "environment": {
+        "UPSTASH_VECTOR_REST_URL": "{env:UPSTASH_VECTOR_REST_URL}",
+        "UPSTASH_VECTOR_REST_TOKEN": "{env:UPSTASH_VECTOR_REST_TOKEN}"
+      }
+    },
+    "sequential-thinking": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "enabled": true
+    },
+    "python-sandbox": {
+      "type": "local",
+      "command": [
+        "deno",
+        "run",
+        "-N",
+        "-R=node_modules",
+        "-W=node_modules",
+        "--node-modules-dir=auto",
+        "jsr:@pydantic/mcp-run-python",
+        "stdio"
+      ],
+      "enabled": true
+    },
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "@playwright/mcp@latest", "--headless"],
+      "enabled": true
+    },
+    "filesystem": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem"],
+      "enabled": false,
+      "environment": {
+        "FILESYSTEM_READ_PATHS": "{cwd}",
+        "FILESYSTEM_WRITE_PATHS": "{cwd}"
+      }
+    },
+    "github": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+      "enabled": false,
+      "environment": {
+        "GITHUB_TOKEN": "{env:GITHUB_TOKEN}"
+      }
+    }
+  },
   "provider": {
     "openpipe": {
       "npm": "@ai-sdk/openai-compatible",
       "name": "OpenPipe",
       "options": {
         "baseURL": "https://api.openpipe.ai/api/v1",
-        "apiKey": "{env:OPENAI_API_KEY}"
+        "apiKey": "{env:OPENAI_API_KEY}",
+        "maxRetries": 3
       },
       "models": {
-        "anthropic:claude-opus-4-1-20250805": {
-          "name": "Claude Opus 4.1"
+        "gpt-4o-2024-08-06": {
+          "name": "GPT-4o (2024-08-06)",
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
         },
-        "anthropic:claude-sonnet-4-20250514": {
-          "name": "Claude Sonnet 4"
+        "gpt-4o-mini-2024-07-18": {
+          "name": "GPT-4o Mini (2024-07-18)",
+          "limit": {
+            "context": 128000,
+            "output": 16384
+          }
+        },
+        "gpt-3.5-turbo-0125": {
+          "name": "GPT-3.5 Turbo (0125)",
+          "limit": {
+            "context": 16385,
+            "output": 4096
+          }
         }
       }
     }
   },
-  "model": "openpipe/anthropic:claude-opus-4-1-20250805",
-  "small_model": "openpipe/anthropic:claude-sonnet-4-20250514"
+  "instructions": ["prompts/concise.txt"],
+  "model": "openpipe/gpt-4o-2024-08-06",
+  "small_model": "openpipe/gpt-4o-mini-2024-07-18"
 }
