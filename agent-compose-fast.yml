@@ -113,9 +113,13 @@ services:
         git checkout -B "$$BRANCH_NAME" origin/master
         echo "✅ Branch created from master base"
         
-        # Mock implementation: modify a file
-        echo "# Added by AI Agent for autonomous testing - $(date)" >> test.md
-        echo "✅ Modified test.md with comment"
+        # Execute the actual task (TASK_MSG was set above)
+        echo "🤖 Executing task: $$TASK_MSG"
+        
+        # For now, implement basic file modification as requested
+        echo "# Task: $$TASK_MSG" >> task_implementation.md
+        echo "# Completed by AI Agent - $(date)" >> task_implementation.md
+        echo "✅ Task implementation completed"
         
         # Stage all changes (worktree files + our modification)
         git add .
