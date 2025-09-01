@@ -93,6 +93,8 @@ services:
         # Since we can't use Claude Code with --dangerously-skip-permissions as root,
         # we'll implement the task directly with git commands for autonomous operation
         echo "🤖 Implementing task autonomously..."
+        su - claude -c "cd /workspace && ANTHROPIC_API_KEY='$$ANTHROPIC_API_KEY' GITHUB_TOKEN='$$GITHUB_TOKEN' GH_TOKEN='$$GITHUB_TOKEN' npx --yes @anthropic-ai/claude-code@1.0.70 --dangerously-skip-permissions -p \"$$TASK_MSG\""
+
         
         # Ensure git user is configured before any git operations
         git config user.name "AI Agent"
