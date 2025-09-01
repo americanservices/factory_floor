@@ -31,8 +31,11 @@ services:
           TASK_MSG="Modify some random file adding a comment and commit the changes and push it to the repo as a new pr, Commit your changes with conventional commits referencing #2"
         fi
         
-        # Install GitHub CLI and curl
-        apt-get update && apt-get install -y gh curl
+        # Install GitHub CLI, curl and create claude user
+        apt-get update && apt-get install -y gh curl sudo
+        useradd -m -s /bin/bash claude || echo "User claude already exists"
+        chown -R claude:claude /workspace
+        echo "✅ User claude created and workspace permissions set"
         
         # Configure Git with safe directories first
         git config --global --add safe.directory /workspace
