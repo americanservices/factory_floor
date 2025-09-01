@@ -1,0 +1,208 @@
+# Starship configuration for Factory Floor workflow
+# Optimized for AI Factory Floor development environment
+
+# Core settings
+format = """
+$username\
+$hostname\
+$directory\
+$git_branch\
+$git_status\
+$git_state\
+$custom\
+$line_break\
+$character"""
+
+# Prompt character with workflow status
+[character]
+success_symbol = "[➜](bold green)"
+error_symbol = "[➜](bold red)"
+vicmd_symbol = "[➜](bold yellow)"
+
+# Directory display
+[directory]
+style = "blue"
+read_only = " "
+truncation_length = 3
+truncate_to_repo = false
+
+# Git branch with semantic type coloring
+[git_branch]
+format = "[$symbol$branch]($style) "
+symbol = " "
+style = "bold purple"
+
+# Git status with Factory Floor context
+[git_status]
+format = '([\[$all_status$ahead_behind\]]($style) )'
+style = "cyan"
+conflicted = "🏳"
+up_to_date = "✓"
+untracked = "?"
+ahead = "⇡${count}"
+diverged = "⇕⇡${ahead_count}⇣${behind_count}"
+behind = "⇣${count}"
+stashed = "📦"
+modified = "!"
+staged = "+"
+renamed = "»"
+deleted = "✘"
+
+# Git state (for rebase, merge, etc.)
+[git_state]
+format = '\([$state( $progress_current/$progress_total)]($style)\) '
+style = "bright-black"
+
+# Custom module for Factory Floor workflow status
+[custom.factory_floor]
+command = """
+if [ -f .context/issue-*.md ]; then
+  issue_num=$(ls .context/issue-*.md 2>/dev/null | head -1 | sed 's/.*issue-\([0-9]*\)\.md/\1/')
+  echo "🏭#$issue_num"
+elif [ -d .git ]; then
+  echo "🏭"
+fi
+"""
+when = "true"
+style = "bold bright-yellow"
+format = "[$output]($style) "
+
+# Custom module for Git Town branch type
+[custom.git_town_type]
+command = """
+if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+  branch=$(git branch --show-current 2>/dev/null)
+  if [[ $branch == feat/* ]]; then
+    echo "🚀"
+  elif [[ $branch == fix/* ]]; then
+    echo "🔧"
+  elif [[ $branch == hotfix/* ]]; then
+    echo "🔥"
+  elif [[ $branch == chore/* ]]; then
+    echo "🧹"
+  elif [[ $branch == docs/* ]]; then
+    echo "📝"
+  elif [[ $branch == test/* ]]; then
+    echo "🧪"
+  elif [[ $branch == main || $branch == master ]]; then
+    echo "🌟"
+  else
+    echo "🌿"
+  fi
+fi
+"""
+when = "git rev-parse --git-dir"
+style = "bold green"
+format = "[$output]($style)"
+
+# Custom module for Git Town branch state
+[custom.git_town_state]
+command = """
+if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+  # Check for parked branches
+  if git config --get-regexp "git-town-branch.*.type" 2>/dev/null | grep -q "parked"; then
+    echo "⏸️"
+  # Check for prototype branches  
+  elif git config --get-regexp "git-town-branch.*.type" 2>/dev/null | grep -q "prototype"; then
+    echo "🧪"
+  # Check for observed branches
+  elif git config --get-regexp "git-town-branch.*.type" 2>/dev/null | grep -q "observed"; then
+    echo "👁️"
+  # Check for contribution branches
+  elif git config --get-regexp "git-town-branch.*.type" 2>/dev/null | grep -q "contribution"; then
+    echo "🤝"
+  # Check if ready to ship (no uncommitted changes, ahead of parent)
+  elif ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "⚡"
+  elif git rev-list --count @{u}..HEAD 2>/dev/null | grep -q "^[1-9]"; then
+    echo "🚢"
+  fi
+fi
+"""
+when = "git rev-parse --git-dir"
+style = "bold cyan"
+format = "[$output]($style)"
+
+# Custom module for worktree status
+[custom.worktree_status]
+command = """
+if [ -f .git ] && grep -q "gitdir:" .git 2>/dev/null; then
+  worktree_path=$(cat .git | sed 's/gitdir: //')
+  if [[ $worktree_path == *"/worktrees/"* ]]; then
+    echo "📁"
+  fi
+fi
+"""
+when = "test -f .git"
+style = "bold magenta"
+format = "[$output]($style)"
+
+# Custom module for MCP server status
+[custom.mcp_status]
+command = """
+mcp_count=0
+if [ -d .mcp/pids ]; then
+  for pid_file in .mcp/pids/*.pid; do
+    if [ -f "$pid_file" ]; then
+      pid=$(cat "$pid_file" 2>/dev/null)
+      if kill -0 "$pid" 2>/dev/null; then
+        ((mcp_count++))
+      fi
+    fi
+  done
+fi
+if [ $mcp_count -gt 0 ]; then
+  echo "🔌$mcp_count"
+fi
+"""
+when = "test -d .mcp"
+style = "bold blue"
+format = "[$output]($style)"
+
+# Custom module for sync status
+[custom.sync_status]
+command = """
+if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+  # Check if we have a remote
+  if git remote -v 2>/dev/null | grep -q "origin"; then
+    # Check if we're ahead/behind
+    local_commit=$(git rev-parse HEAD 2>/dev/null)
+    remote_commit=$(git rev-parse @{u} 2>/dev/null)
+    
+    if [ "$local_commit" != "$remote_commit" ]; then
+      ahead=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
+      behind=$(git rev-list --count HEAD..@{u} 2>/dev/null || echo "0")
+      
+      if [ "$ahead" -gt 0 ] && [ "$behind" -gt 0 ]; then
+        echo "↕️"
+      elif [ "$ahead" -gt 0 ]; then
+        echo "↑"
+      elif [ "$behind" -gt 0 ]; then
+        echo "↓"
+      fi
+    else
+      echo "✓"
+    fi
+  fi
+fi
+"""
+when = "git rev-parse --git-dir"
+style = "bold white"
+format = "[$output]($style)"
+
+# Username (only show if not default)
+[username]
+style_user = "white bold"
+style_root = "red bold"
+format = "[$user]($style) "
+disabled = false
+show_always = false
+
+# Hostname (only show if SSH)
+[hostname]
+ssh_only = true
+format = "[$hostname](bold red) "
+disabled = false
+
+# Reduce command timeout for performance
+[custom]
