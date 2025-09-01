@@ -69,7 +69,7 @@ API keys are managed securely within the devenv shell:
 - **OPENAI_API_KEY** - For GPT models (optional)
 - **EXA_API_KEY** - For web search capabilities (optional)
 
-**Important:** Set up secrets using `secrets-setup` command after entering the shell.
+**Important:** Set up secrets using `source setup-secrets.sh` command after entering the shell.
 
 ## 🛠️ Installation
 
@@ -93,7 +93,10 @@ direnv allow
 dev-setup  # Creates directories and initial configuration
 
 # 5. Set up secrets for AI features
-secrets-setup  # Configure API keys securely
+source setup-secrets.sh # Load 1Password secrets to shell
+
+# 6. Start your agent
+opencode
 ```
 
 ### For Existing Factory Floor Users
@@ -111,11 +114,11 @@ direnv allow
 # 3. Configure Git Town (for branch management)
 gt-setup
 
-# 4. Set up API keys (if using AI features)
-export ANTHROPIC_API_KEY="your-key-here"
-# OR use 1Password integration
-op-login
-secrets-dev
+# 4. Set up API keys
+source setup-secrets.sh # Load 1Password secrets to shell
+
+# 5. Start your agent
+opencode
 ```
 
 ## ✨ Features
