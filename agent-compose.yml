@@ -1,0 +1,22 @@
+services:
+  ai-agent:
+    image: node:18-slim
+    working_dir: /workspace
+    volumes:
+      - ${WORKTREE_PATH:-./}:/workspace:rw
+      - ${CONTEXT_PATH:-./.context}:/context:ro
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - WORKSPACE=/workspace
+      - ISSUE_NUMBER=${ISSUE_NUMBER:-}
+      - TASK_MSG=${TASK_MSG:-}
+    command:
+      - bash
+      - -c
+      - |
+        echo ""
+        echo "🚀 Starting Claude with task..."
+        npm install -g @anthropic-ai/claude-code
+        claude -p "Numero del uno al 10"
+    stdin_open: false
+    tty: false

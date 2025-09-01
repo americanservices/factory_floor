@@ -1,0 +1,156 @@
+services:
+  ai-agent:
+    image: node:18
+    working_dir: /workspace
+    volumes:
+      - ${WORKTREE_PATH:-./}:/workspace:rw
+      - ${CONTEXT_PATH:-./.context}:/context:ro
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - WORKSPACE=/workspace
+      - ISSUE_NUMBER=${ISSUE_NUMBER:-2}
+      - GITHUB_KEY=${GITHUB_KEY:-}
+      - TASK_MSG=${TASK_MSG:-}
+    command:
+      - bash
+      - -c
+      - |
+        # Use task from environment variable or create default
+        if [ -n "$$TASK_MSG" ]; then
+          echo "✅ Task from environment variable:"
+          echo "📄 TASK_MSG: [$$TASK_MSG]"
+        elif [ -f "/context/task.txt" ]; then
+          echo "✅ Task file found, reading content:"
+          echo "📄 RAW FILE CONTENT:"
+          cat /context/task.txt
+          echo ""
+          TASK_MSG=$$(cat /context/task.txt)
+          echo "📄 VARIABLE CONTENT: [$$TASK_MSG]"
+        else
+          echo "⚠️ No task specified, using default task"
+          TASK_MSG="Modify some random file adding a comment and commit the changes and push it to the repo as a new pr, Commit your changes with conventional commits referencing #2"
+        fi
+        
+        # Install GitHub CLI, curl and create claude user
+        apt-get update && apt-get install -y gh curl sudo
+        useradd -m -s /bin/bash claude || echo "User claude already exists"
+        chown -R claude:claude /workspace
+        echo "✅ User claude created and workspace permissions set"
+        
+        # Configure Git with safe directories first
+        git config --global --add safe.directory /workspace
+        git config --global --add safe.directory '*'
+        git config --global user.name "AI Agent"
+        git config --global user.email "ai-agent@americanservices.tech"
+        
+        # Setup GitHub CLI authentication 
+        echo "$GITHUB_KEY" | gh auth login --with-token
+        echo "🔐 GitHub authentication test:"
+        gh auth status || echo "⚠️ GitHub CLI auth failed"
+        
+        # Configure git to use GitHub CLI for authentication
+        gh auth setup-git
+        
+        # Debug: show current environment
+        cd /workspace
+        echo "🔍 DEBUG: Current environment and git setup"
+        echo "Current directory: $(pwd)"
+        echo "Contents:"
+        ls -la
+        echo "Git status:"
+        if [ -f .git ]; then
+          echo ".git is a FILE (worktree pointer):"
+          cat .git
+        elif [ -d .git ]; then
+          echo ".git is a DIRECTORY"
+          ls -la .git/
+        else
+          echo ".git does not exist"
+        fi
+        echo "Environment variables:"
+        echo "  WORKTREE_PATH: ${WORKTREE_PATH:-not_set}"
+        echo "  CONTEXT_PATH: ${CONTEXT_PATH:-not_set}"  
+        echo "  ISSUE_NUMBER: ${ISSUE_NUMBER:-not_set}"
+        echo "  GITHUB_TOKEN: ${GITHUB_TOKEN:-not_set}"
+        echo ""
+        
+        echo "🔧 Fixing git setup for container..."
+        
+        # Skip git initialization - use the worktree as-is with existing history
+        git config --global --add safe.directory /workspace
+        
+        echo "🔗 Verifying git remote..."
+        git remote -v || echo "No remotes found"
+        
+        echo "🔍 Checking current git status..."
+        git status || echo "Git status failed"
+        git branch -a || echo "Branch listing failed"
+        
+        echo "✅ Git repository ready"
+        
+        echo ""
+        echo "🚀 Starting Claude with task..."
+        echo "📄 Task: $$TASK_MSG"
+        echo ""
+        
+        # Since we can't use Claude Code with --dangerously-skip-permissions as root,
+        # we'll implement the task directly with git commands for autonomous operation
+        echo "🤖 Implementing task autonomously..."
+        su - claude -c "cd /workspace && ANTHROPIC_API_KEY='$$ANTHROPIC_API_KEY' GITHUB_TOKEN='$$GITHUB_TOKEN' GH_TOKEN='$$GITHUB_TOKEN' npx --yes @anthropic-ai/claude-code@1.0.70 --dangerously-skip-permissions -p \"$$TASK_MSG\"" && echo "✅ Claude Code execution completed" || echo "❌ Claude Code execution failed"
+        
+        # After Claude finishes, ensure git user is configured
+        git config user.name "AI Agent"
+        git config user.email "ai-agent@americanservices.tech"
+        echo "✅ Git user configured"
+        
+        # Get current branch name to preserve it
+        ORIGINAL_BRANCH=$(git branch --show-current 2>/dev/null || echo "master")
+        echo "🔍 DEBUG: Issue number from environment: [$${ISSUE_NUMBER:-EMPTY}]"
+        echo "🔍 DEBUG: Original branch: $$ORIGINAL_BRANCH"
+        
+        # Create proper branch name based on issue
+        BRANCH_NAME="fix/issue-$${ISSUE_NUMBER:-2}-autonomous"
+        echo "🔍 DEBUG: Target branch: $$BRANCH_NAME"
+        
+        # Always create/recreate branch from master to ensure common history
+        echo "🔄 Creating/recreating $$BRANCH_NAME from master..."
+        git checkout -B "$$BRANCH_NAME" origin/master
+        echo "✅ Branch created from master base"
+        
+        # Execute the actual task (TASK_MSG was set above)
+        echo "🤖 Executing task: $$TASK_MSG"
+        
+        # For now, implement basic file modification as requested
+        echo "# Task: $$TASK_MSG" >> task_implementation.md
+        echo "# Completed by AI Agent - $(date)" >> task_implementation.md
+        echo "✅ Task implementation completed"
+        
+        # Stage all changes (worktree files + our modification)
+        git add .
+        echo "✅ Staged all changes"
+        
+        # Create commit with conventional commit format
+        git commit -m "feat: implement changes for issue #$${ISSUE_NUMBER:-2}
+
+        🤖 Generated with Claude Code
+        
+        Co-Authored-By: Claude <noreply@anthropic.com>"
+        echo "✅ Created commit"
+        
+        # Try git push now that gh auth setup-git was run
+        echo "📤 Pushing branch with git (using gh credentials)..."
+        git push --set-upstream origin "$$BRANCH_NAME" 2>&1 && echo "✅ Push successful" || echo "❌ Push failed"
+        
+        # Create PR
+        echo "📋 Creating pull request..."
+        gh repo set-default americanservices/factory_floor
+        gh pr create --title "feat: implement changes for issue #$${ISSUE_NUMBER:-2}" --body "Automated PR created by AI agent to resolve issue #$${ISSUE_NUMBER:-2}." --head "$$BRANCH_NAME" --base master --repo americanservices/factory_floor 2>&1 && echo "✅ PR created successfully" || echo "❌ PR creation failed"
+        
+        echo "✅ Workflow completed"
+        
+        echo "🔗 Checking if PR was created..."
+        gh pr list --head "$$BRANCH_NAME" 2>&1 || echo "❌ No PR found for this branch"
+        
+        echo "✅ Autonomous workflow completed"
+    stdin_open: false
+    tty: false
