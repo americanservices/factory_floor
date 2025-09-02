@@ -22,6 +22,7 @@ in
       git
       gh
       git-town
+      difftastic  # Enhanced diff tool with syntax highlighting
       
       # Container tools
       inputs.dagger.packages.${pkgs.system}.dagger
@@ -1785,6 +1786,11 @@ PYTHON_SCRIPT
         git config alias.wt "worktree" || true
         git config alias.stack "!stack-status" || true
         
+        # Configure difftastic for enhanced diffs
+        echo "Configuring difftastic..."
+        git config diff.external "difft" || true
+        git config alias.difft "!difft" || true
+        
         # Create directory structure
         echo "Creating directory structure..."
         mkdir -p worktrees
@@ -2007,6 +2013,151 @@ PYTHON_SCRIPT
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             ;;
         esac
+      '';
+      
+      # ============================================
+      # DIFFTASTIC ENHANCED DIFF TOOLS
+      # ============================================
+      
+      # Enhanced diff between branches with difftastic
+      diff-enhanced.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        if [ $# -lt 2 ]; then
+          echo "Usage: diff-enhanced <branch1> <branch2> [file...]"
+          echo ""
+          echo "Enhanced branch comparison with difftastic:"
+          echo "  Shows syntax-highlighted, structural diffs"
+          echo "  Better visualization of code changes"
+          echo ""
+          echo "Examples:"
+          echo "  diff-enhanced main feat/auth"
+          echo "  diff-enhanced main HEAD src/auth.py"
+          exit 1
+        fi
+        
+        BRANCH1="$1"
+        BRANCH2="$2"
+        shift 2
+        
+        echo "🔍 Enhanced diff: $BRANCH1...$BRANCH2"
+        
+        if [ $# -eq 0 ]; then
+          # Show all changes
+          git diff --no-ext-diff "$BRANCH1...$BRANCH2" --name-only | while read -r file; do
+            echo "📄 $file"
+            echo "────────────────────────────────────────"
+            difft <(git show "$BRANCH1:$file" 2>/dev/null || echo "") <(git show "$BRANCH2:$file" 2>/dev/null || echo "") || true
+            echo ""
+          done
+        else
+          # Show specific files
+          for file in "$@"; do
+            echo "📄 $file"
+            echo "────────────────────────────────────────"
+            difft <(git show "$BRANCH1:$file" 2>/dev/null || echo "") <(git show "$BRANCH2:$file" 2>/dev/null || echo "") || true
+            echo ""
+          done
+        fi
+      '';
+      
+      # Show merge conflicts with difftastic
+      diff-conflicts.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        echo "🔥 Analyzing merge conflicts with difftastic..."
+        
+        # Check if we're in a merge state
+        if ! git status --porcelain | grep -q "^UU\|^AA\|^DD"; then
+          echo "❌ No merge conflicts detected"
+          echo "💡 Run this during an active merge with conflicts"
+          exit 1
+        fi
+        
+        # Get conflicted files
+        CONFLICTED_FILES=$(git status --porcelain | grep "^UU\|^AA\|^DD" | cut -c4-)
+        
+        if [ -z "$CONFLICTED_FILES" ]; then
+          echo "✅ No conflicts found"
+          exit 0
+        fi
+        
+        echo "Conflicted files:"
+        echo "$CONFLICTED_FILES" | sed 's/^/  📄 /'
+        echo ""
+        
+        # Show each conflict with difftastic
+        echo "$CONFLICTED_FILES" | while read -r file; do
+          echo "🔍 Analyzing conflict: $file"
+          echo "════════════════════════════════════════"
+          
+          # Show our version vs their version
+          echo "📗 OURS (current branch):"
+          git show :2:"$file" | head -20
+          echo ""
+          echo "📘 THEIRS (merging branch):"  
+          git show :3:"$file" | head -20
+          echo ""
+          echo "🔄 DIFF (ours vs theirs):"
+          difft <(git show :2:"$file" 2>/dev/null || echo "") <(git show :3:"$file" 2>/dev/null || echo "") || true
+          echo ""
+          echo "────────────────────────────────────────"
+          echo ""
+        done
+      '';
+      
+      # Preview merge result with difftastic
+      preview-merge.exec = ''
+        #!/usr/bin/env bash
+        set -euo pipefail
+        
+        if [ $# -ne 1 ]; then
+          echo "Usage: preview-merge <branch>"
+          echo ""
+          echo "Preview what merging a branch would look like:"
+          echo "  Shows changes that would be introduced"
+          echo "  Uses difftastic for enhanced visualization"
+          echo ""
+          echo "Example:"
+          echo "  preview-merge feat/oauth"
+          exit 1
+        fi
+        
+        BRANCH="$1"
+        CURRENT=$(git branch --show-current)
+        
+        echo "🔍 Preview: merging $BRANCH into $CURRENT"
+        echo ""
+        
+        # Check if merge would be fast-forward
+        if git merge-base --is-ancestor "$CURRENT" "$BRANCH"; then
+          echo "✅ This would be a fast-forward merge"
+        else
+          echo "🔄 This would create a merge commit"
+        fi
+        
+        # Show what changes would be introduced
+        echo ""
+        echo "📋 Files that would be changed:"
+        git diff --name-only "$CURRENT...$BRANCH" | sed 's/^/  📄 /'
+        
+        echo ""
+        echo "📊 Statistics:"
+        git diff --stat "$CURRENT...$BRANCH"
+        
+        echo ""
+        echo "🔍 Detailed changes:"
+        echo "════════════════════════════════════════"
+        
+        # Show detailed diff with difftastic
+        git diff --no-ext-diff "$CURRENT...$BRANCH" --name-only | while read -r file; do
+          echo "📄 $file"
+          echo "────────────────────────────────────────"
+          difft <(git show "$CURRENT:$file" 2>/dev/null || echo "") <(git show "$BRANCH:$file" 2>/dev/null || echo "") || true
+          echo ""
+        done
       '';
       
     };
