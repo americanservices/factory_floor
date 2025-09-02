@@ -46,6 +46,7 @@ class WorktreeManager:
                 ["git", "worktree", "list", "--porcelain"],
                 capture_output=True,
                 text=True,
+                cwd=str(self.root_dir),
                 check=True
             )
             
@@ -90,24 +91,41 @@ class WorktreeManager:
                     
                 # Check for nested worktrees
                 wt['children'] = []
-                if path != self.root_dir:
-                    worktree_subdir = path / 'worktrees'
-                    if worktree_subdir.exists():
-                        for child in worktrees:
-                            child_path = Path(child['path'])
-                            if child_path.parent.parent == path:
-                                wt['children'].append(child['name'])
+                
+            # Build parent-child relationships after all worktrees are processed
+            for wt in worktrees:
+                path = Path(wt['path'])
+                # Look for children whose path starts with this worktree's path + /worktrees/
+                for child in worktrees:
+                    child_path = Path(child['path'])
+                    # Check if child is nested under this worktree
+                    expected_parent = path / 'worktrees' / child_path.name
+                    if child_path == expected_parent or (
+                        str(child_path).startswith(str(path / 'worktrees')) and 
+                        child_path != path
+                    ):
+                        wt['children'].append(child['name'])
                                 
             return worktrees
             
         except subprocess.CalledProcessError as e:
             console.print(f"[red]Error getting worktrees: {e}[/red]")
+            if e.stderr:
+                console.print(f"[red]Details: {e.stderr.strip()}[/red]")
+            console.print("[yellow]Make sure you're in a git repository[/yellow]")
+            return []
+        except FileNotFoundError:
+            console.print("[red]Git command not found[/red]")
+            console.print("[yellow]Make sure git is installed and in your PATH[/yellow]")
+            return []
+        except Exception as e:
+            console.print(f"[red]Unexpected error getting worktrees: {e}[/red]")
             return []
     
     def create_worktree(self, branch_name: str, parent_branch: Optional[str] = None) -> bool:
         """Create a new worktree"""
         try:
-            # Check if we're already in devenv shell
+            # Build command based on environment
             if os.environ.get('DEVENV_ROOT'):
                 # We're in devenv, call the script directly
                 cmd = ["wt-new", branch_name]
@@ -115,19 +133,32 @@ class WorktreeManager:
                     cmd.append(parent_branch)
             else:
                 # Not in devenv, need to use devenv shell
-                cmd = ["devenv", "shell", "--impure", "-c", f"wt-new {branch_name}"]
+                cmd_str = f"wt-new {branch_name}"
                 if parent_branch:
-                    cmd[-1] += f" {parent_branch}"
+                    cmd_str += f" {parent_branch}"
+                cmd = ["devenv", "shell", "--impure", "-c", cmd_str]
                 
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            console.print(f"[dim]Running: {' '.join(cmd)}[/dim]")
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(self.root_dir))
+            
             if result.returncode == 0:
                 console.print(f"[green]✅ Created worktree: {branch_name}[/green]")
+                if result.stdout:
+                    console.print(f"[dim]{result.stdout.strip()}[/dim]")
                 return True
             else:
-                console.print(f"[red]Failed to create worktree: {result.stderr}[/red]")
+                console.print(f"[red]❌ Failed to create worktree: {branch_name}[/red]")
+                if result.stderr:
+                    console.print(f"[red]Error: {result.stderr.strip()}[/red]")
+                if result.stdout:
+                    console.print(f"[dim]Output: {result.stdout.strip()}[/dim]")
                 return False
+        except FileNotFoundError as e:
+            console.print(f"[red]Command not found: {e}[/red]")
+            console.print("[yellow]Make sure you're in a devenv shell or have the required commands available[/yellow]")
+            return False
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"[red]Unexpected error: {e}[/red]")
             return False
 
 
@@ -156,30 +187,83 @@ class MCPServerManager:
             pid_file = pid_dir / f"{server_name}.pid"
             if pid_file.exists():
                 try:
-                    pid = int(pid_file.read_text().strip())
-                    # Check if process is running
-                    os.kill(pid, 0)
-                    status[server_name] = "running"
-                except (OSError, ValueError):
+                    pid_content = pid_file.read_text().strip()
+                    if not pid_content:
+                        status[server_name] = "stopped"
+                        continue
+                        
+                    pid = int(pid_content)
+                    # Check if process is running using cross-platform method
+                    try:
+                        os.kill(pid, 0)
+                        status[server_name] = "running"
+                    except OSError:
+                        # Process doesn't exist, clean up stale pid file
+                        try:
+                            pid_file.unlink()
+                        except OSError:
+                            pass
+                        status[server_name] = "stopped"
+                except (ValueError, FileNotFoundError):
                     status[server_name] = "stopped"
             else:
                 status[server_name] = "not started"
                 
         return status
     
-    def start_servers(self):
+    def start_servers(self) -> bool:
         """Start all MCP servers"""
-        if os.environ.get('DEVENV_ROOT'):
-            subprocess.run(["mcp-start"])
-        else:
-            subprocess.run(["devenv", "shell", "--impure", "-c", "mcp-start"])
+        try:
+            if os.environ.get('DEVENV_ROOT'):
+                result = subprocess.run(["mcp-start"], capture_output=True, text=True)
+            else:
+                result = subprocess.run(["devenv", "shell", "--impure", "-c", "mcp-start"], 
+                                      capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                console.print("[green]✅ MCP servers started successfully[/green]")
+                if result.stdout:
+                    console.print(f"[dim]{result.stdout.strip()}[/dim]")
+                return True
+            else:
+                console.print("[red]❌ Failed to start MCP servers[/red]")
+                if result.stderr:
+                    console.print(f"[red]{result.stderr.strip()}[/red]")
+                return False
+        except FileNotFoundError:
+            console.print("[red]mcp-start command not found[/red]")
+            console.print("[yellow]Make sure you're in a devenv shell[/yellow]")
+            return False
+        except Exception as e:
+            console.print(f"[red]Error starting MCP servers: {e}[/red]")
+            return False
         
-    def stop_servers(self):
+    def stop_servers(self) -> bool:
         """Stop all MCP servers"""
-        if os.environ.get('DEVENV_ROOT'):
-            subprocess.run(["mcp-stop"])
-        else:
-            subprocess.run(["devenv", "shell", "--impure", "-c", "mcp-stop"])
+        try:
+            if os.environ.get('DEVENV_ROOT'):
+                result = subprocess.run(["mcp-stop"], capture_output=True, text=True)
+            else:
+                result = subprocess.run(["devenv", "shell", "--impure", "-c", "mcp-stop"], 
+                                      capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                console.print("[green]✅ MCP servers stopped successfully[/green]")
+                if result.stdout:
+                    console.print(f"[dim]{result.stdout.strip()}[/dim]")
+                return True
+            else:
+                console.print("[red]❌ Failed to stop MCP servers[/red]")
+                if result.stderr:
+                    console.print(f"[red]{result.stderr.strip()}[/red]")
+                return False
+        except FileNotFoundError:
+            console.print("[red]mcp-stop command not found[/red]")
+            console.print("[yellow]Make sure you're in a devenv shell[/yellow]")
+            return False
+        except Exception as e:
+            console.print(f"[red]Error stopping MCP servers: {e}[/red]")
+            return False
 
 
 class DevFlowTUI:
@@ -195,15 +279,36 @@ class DevFlowTUI:
         tree = Tree("🌳 [bold]Worktrees[/bold]")
         worktrees = self.wt_manager.get_worktrees()
         
-        # Build tree structure
-        root_wts = [wt for wt in worktrees if Path(wt['path']).parent == self.wt_manager.root_dir.parent or Path(wt['path']) == self.wt_manager.root_dir]
+        if not worktrees:
+            tree.add("[dim]No worktrees found[/dim]")
+            return tree
+        
+        # Build tree structure - find root worktrees (not nested under others)
+        root_wts = []
+        for wt in worktrees:
+            path = Path(wt['path'])
+            is_root = True
+            
+            # Check if this worktree is nested under another
+            for other_wt in worktrees:
+                if other_wt == wt:
+                    continue
+                other_path = Path(other_wt['path'])
+                # Check if this path is under another worktree's directory
+                if str(path).startswith(str(other_path / 'worktrees')):
+                    is_root = False
+                    break
+            
+            if is_root:
+                root_wts.append(wt)
         
         for wt in root_wts:
             branch_name = wt.get('branch', 'detached')
             issue = f" #{wt['issue']}" if wt.get('issue') else ""
             current = " [cyan][current][/cyan]" if wt['is_current'] else ""
+            context_indicator = " 📄" if wt.get('has_context') else ""
             
-            node_text = f"{branch_name}{issue}{current}"
+            node_text = f"{branch_name}{issue}{current}{context_indicator}"
             node = tree.add(node_text)
             
             # Add children recursively
@@ -276,16 +381,19 @@ class DevFlowTUI:
             Panel(self.create_mcp_status_table(), border_style="yellow")
         )
         
-        # Footer - commands
+        # Footer - commands and environment info
+        env_info = "devenv" if os.environ.get('DEVENV_ROOT') else "system"
+        zellij_info = " | zellij" if os.environ.get('ZELLIJ') else ""
         layout["footer"].update(
             Panel(
-                "[bold]Commands:[/bold] "
+                f"[bold]Commands:[/bold] "
                 "[cyan](n)[/cyan]ew worktree | "
                 "[cyan](a)[/cyan]gent start | "
                 "[cyan](s)[/cyan]tart MCP | "
                 "[cyan](k)[/cyan]ill MCP | "
                 "[cyan](r)[/cyan]efresh | "
-                "[cyan](q)[/cyan]uit",
+                "[cyan](q)[/cyan]uit | "
+                f"[dim]env: {env_info}{zellij_info}[/dim]",
                 border_style="dim"
             )
         )
@@ -294,11 +402,16 @@ class DevFlowTUI:
     
     def handle_input(self) -> bool:
         """Handle user input"""
-        key = Prompt.ask(
-            "\n[bold]Command[/bold]",
-            choices=["n", "a", "s", "k", "r", "q"],
-            default="r"
-        )
+        try:
+            key = Prompt.ask(
+                "\n[bold]Command[/bold]",
+                choices=["n", "a", "s", "k", "r", "q"],
+                default="r"
+            )
+        except KeyboardInterrupt:
+            return False
+        except EOFError:
+            return False
         
         if key == "q":
             return False
@@ -309,30 +422,7 @@ class DevFlowTUI:
         elif key == "a":
             # Start agent in worktree
             worktree = Prompt.ask("[bold]Worktree name (or 'here' for current)[/bold]")
-            if worktree == "here":
-                # Start agent in current directory
-                if os.environ.get('DEVENV_ROOT'):
-                    subprocess.run(["agent-here"])
-                else:
-                    subprocess.run(["devenv", "shell", "--impure", "-c", "agent-here"])
-            else:
-                # Start agent in specific worktree
-                worktree_path = Path("worktrees") / worktree
-                if worktree_path.exists():
-                    # If in zellij, switch to worktree and start agent
-                    if os.environ.get('ZELLIJ'):
-                        # Create a new tab for the agent
-                        subprocess.run(["zellij", "action", "new-tab", "--name", f"agent-{worktree}", "--cwd", str(worktree_path)])
-                        # Run agent-here in the new tab
-                        subprocess.run(["zellij", "action", "write-chars", "agent-here\n"])
-                    else:
-                        # Not in zellij, run in current terminal
-                        if os.environ.get('DEVENV_ROOT'):
-                            subprocess.run(["sh", "-c", f"cd {worktree_path} && agent-here"])
-                        else:
-                            subprocess.run(["devenv", "shell", "--impure", "-c", f"cd {worktree_path} && agent-here"])
-                else:
-                    console.print(f"[red]Worktree {worktree} not found[/red]")
+            self._start_agent(worktree)
         elif key == "s":
             console.print("[yellow]Starting MCP servers...[/yellow]")
             self.mcp_manager.start_servers()
@@ -358,6 +448,88 @@ class DevFlowTUI:
             console.clear()
         
         console.print("[green]Goodbye! 👋[/green]")
+    
+    def _start_agent(self, worktree: str) -> bool:
+        """Start an agent in the specified worktree or current directory"""
+        try:
+            if worktree == "here":
+                # Start agent in current directory
+                console.print("[yellow]Starting agent in current directory...[/yellow]")
+                if os.environ.get('DEVENV_ROOT'):
+                    result = subprocess.run(["agent-here"], capture_output=True, text=True)
+                else:
+                    result = subprocess.run(["devenv", "shell", "--impure", "-c", "agent-here"], 
+                                          capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    console.print("[green]✅ Agent started successfully[/green]")
+                    return True
+                else:
+                    console.print("[red]❌ Failed to start agent[/red]")
+                    if result.stderr:
+                        console.print(f"[red]{result.stderr.strip()}[/red]")
+                    return False
+            else:
+                # Start agent in specific worktree
+                worktree_path = self.wt_manager.worktree_base / worktree
+                if not worktree_path.exists():
+                    # Try absolute path or current dir relative
+                    alt_path = Path("worktrees") / worktree
+                    if alt_path.exists():
+                        worktree_path = alt_path.absolute()
+                    else:
+                        console.print(f"[red]Worktree {worktree} not found[/red]")
+                        console.print(f"[dim]Looked in: {worktree_path} and {alt_path}[/dim]")
+                        return False
+                
+                console.print(f"[yellow]Starting agent in worktree: {worktree}...[/yellow]")
+                
+                # If in zellij, create new tab and run agent
+                if os.environ.get('ZELLIJ'):
+                    try:
+                        # Create a new tab for the agent
+                        result = subprocess.run([
+                            "zellij", "action", "new-tab", 
+                            "--name", f"agent-{worktree}", 
+                            "--cwd", str(worktree_path)
+                        ], capture_output=True, text=True)
+                        
+                        if result.returncode == 0:
+                            # Run agent-here in the new tab
+                            subprocess.run(["zellij", "action", "write-chars", "agent-here\n"])
+                            console.print(f"[green]✅ Agent started in new Zellij tab: agent-{worktree}[/green]")
+                            return True
+                        else:
+                            console.print("[yellow]Zellij tab creation failed, falling back to current terminal[/yellow]")
+                    except FileNotFoundError:
+                        console.print("[yellow]Zellij not found, running in current terminal[/yellow]")
+                
+                # Not in zellij or zellij failed, run in current terminal
+                cmd_str = f"cd {worktree_path} && agent-here"
+                if os.environ.get('DEVENV_ROOT'):
+                    result = subprocess.run(["sh", "-c", cmd_str], capture_output=True, text=True)
+                else:
+                    result = subprocess.run(["devenv", "shell", "--impure", "-c", cmd_str], 
+                                          capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    console.print(f"[green]✅ Agent started in worktree: {worktree}[/green]")
+                    if result.stdout:
+                        console.print(f"[dim]{result.stdout.strip()}[/dim]")
+                    return True
+                else:
+                    console.print(f"[red]❌ Failed to start agent in worktree: {worktree}[/red]")
+                    if result.stderr:
+                        console.print(f"[red]{result.stderr.strip()}[/red]")
+                    return False
+                    
+        except FileNotFoundError as e:
+            console.print(f"[red]Command not found: {e}[/red]")
+            console.print("[yellow]Make sure agent-here is available in your PATH[/yellow]")
+            return False
+        except Exception as e:
+            console.print(f"[red]Unexpected error starting agent: {e}[/red]")
+            return False
 
 
 def main():
