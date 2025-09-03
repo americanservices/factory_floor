@@ -1728,7 +1728,7 @@ PYTHON_SCRIPT
           # Ensure the dev wrapper runs from this project directory
           export OPENCODE_PROJECT_CWD="$(pwd)"
           # Execute the flake app that wraps our forked opencode
-          exec nix --extra-experimental-features "nix-command flakes" run github:americanservices/factory_floor#opencode-dev -- "$@"
+          exec nix --extra-experimental-features "nix-command flakes" run --no-write-lock-file github:americanservices/factory_floor#opencode-dev -- "$@"
         ' bash "$@"
       '';
       
