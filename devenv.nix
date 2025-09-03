@@ -1114,9 +1114,26 @@ Automated commit from wt-ship-all command." || echo "    ⚠️  Could not commi
         #!/usr/bin/env bash
         set -euo pipefail
         
-        ISSUE="''${1:-}"
+        # Parse arguments
+        FORCE_LOCAL=false
+        ISSUE=""
+        
+        while [[ $# -gt 0 ]]; do
+          case $1 in
+            --local)
+              FORCE_LOCAL=true
+              shift
+              ;;
+            *)
+              ISSUE="$1"
+              shift
+              ;;
+          esac
+        done
+        
         if [ -z "$ISSUE" ]; then
-          echo "Usage: agent-start <issue-number>"
+          echo "Usage: agent-start <issue-number> [--local]"
+          echo "  --local: Force local execution (skip Docker containerization)"
           exit 1
         fi
         
@@ -1178,8 +1195,8 @@ EOF
         echo "🤖 Starting AI agent for issue #$ISSUE..."
         cd "worktrees/$BRANCH"
         
-        # Use Docker Compose for isolation if available, otherwise run locally
-        if command -v docker-compose &> /dev/null || command -v docker &> /dev/null; then
+        # Use Docker Compose for isolation if available and not forced local, otherwise run locally
+        if [ "$FORCE_LOCAL" = false ] && (command -v docker-compose &> /dev/null || command -v docker &> /dev/null); then
           echo "🐳 Running AI agent in Docker container..."
           
           # Set environment variables for docker-compose
@@ -1224,7 +1241,11 @@ EOF
           fi
         else
           # Fallback to local execution
-          echo "💻 Starting Claude locally (install Dagger for isolation)..."
+          if [ "$FORCE_LOCAL" = true ]; then
+            echo "💻 Starting Claude locally (--local flag specified)..."
+          else
+            echo "💻 Starting Claude locally (Docker not available)..."
+          fi
           echo "📦 Using Claude Code CLI via npx..."
           
           # Create or switch to zellij tab for this agent
