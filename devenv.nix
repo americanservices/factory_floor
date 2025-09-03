@@ -1727,14 +1727,11 @@ PYTHON_SCRIPT
           export OPENPIPE_API_KEY="''${OPENPIPE_API_KEY:-''${OPENAI_API_KEY:-}}"
           # Ensure the dev wrapper runs from this project directory
           export OPENCODE_PROJECT_CWD="$(pwd)"
-          # Execute the flake app that wraps our forked opencode
-          FLAKE_REF="github:americanservices/factory_floor#opencode-dev"
-          # If we're in the factory_floor repo itself, prefer the local flake for pre-merge testing
-          if command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null; then
-            if git remote -v 2>/dev/null | grep -q "americanservices[/:]factory_floor"; then
-              FLAKE_REF=".#opencode-dev"
-            fi
-          fi
+          # Execute the flake app from our forked opencode (hardcoded)
+          FLAKE_REF="github:americanservices/opencode-openpipe-fork#opencode-dev"
+          # Resolve the fork's source root for the dev wrapper to find local packages
+          FORK_SRC=$(nix --extra-experimental-features "nix-command flakes" eval --no-write-lock-file --raw '(builtins.getFlake "github:americanservices/opencode-openpipe-fork").outPath' 2>/dev/null || true)
+          export OPENCODE_DEV_SRC="${OPENCODE_DEV_SRC:-$FORK_SRC}"
           exec nix --extra-experimental-features "nix-command flakes" run --no-write-lock-file "$FLAKE_REF" -- "$@"
         ' bash "$@"
       '';
