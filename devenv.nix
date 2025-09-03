@@ -1731,7 +1731,7 @@ PYTHON_SCRIPT
           FLAKE_REF="github:americanservices/opencode-openpipe-fork#opencode-dev"
           # Resolve the fork's source root for the dev wrapper to find local packages
           FORK_SRC=$(nix --extra-experimental-features "nix-command flakes" eval --no-write-lock-file --raw '(builtins.getFlake "github:americanservices/opencode-openpipe-fork").outPath' 2>/dev/null || true)
-          export OPENCODE_DEV_SRC="${OPENCODE_DEV_SRC:-$FORK_SRC}"
+          export OPENCODE_DEV_SRC="''${OPENCODE_DEV_SRC:-$FORK_SRC}"
           exec nix --extra-experimental-features "nix-command flakes" run --no-write-lock-file "$FLAKE_REF" -- "$@"
         ' bash "$@"
       '';
