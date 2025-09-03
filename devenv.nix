@@ -1698,29 +1698,38 @@ PYTHON_SCRIPT
       # UTILITY FUNCTIONS
       # ============================================
       
-      # OpenCode with secrets injected
+      # OpenCode with secrets injected (via flake app)
       opencode-dev.exec = ''
         #!/usr/bin/env bash
         set -euo pipefail
-        
-        echo "🤖 Starting OpenCode with secrets..."
-        
+
+        echo "🤖 Starting OpenCode (fork dev wrapper) with secrets..."
+
         # Check if op is available
         if ! command -v op &> /dev/null; then
           echo "❌ 1Password CLI not found"
           echo "💡 Re-enter devenv shell to install it"
           exit 1
         fi
-        
-        # Check if signed in to 1Password
+
+        # Ensure 1Password is signed in (non-interactive if already authenticated)
         if ! op vault list &>/dev/null 2>&1; then
           echo "🔑 Not signed in to 1Password. Signing in..."
           eval $(op signin)
         fi
-        
-        # Run OpenCode with secrets injected via SecretSpec
+
+        # Use SecretSpec to inject secrets, then set OPENPIPE_API_KEY fallback and invoke the flake app.
+        # We run a login shell so the fallback expansion happens after SecretSpec injects environment vars.
         echo "🔐 Injecting secrets and starting OpenCode..."
-        secretspec run -- opencode "$@"
+        secretspec run -- bash -lc '
+          set -euo pipefail
+          # Bridge OPENAI_API_KEY -> OPENPIPE_API_KEY if needed
+          export OPENPIPE_API_KEY="''${OPENPIPE_API_KEY:-''${OPENAI_API_KEY:-}}"
+          # Ensure the dev wrapper runs from this project directory
+          export OPENCODE_PROJECT_CWD="$(pwd)"
+          # Execute the flake app that wraps our forked opencode
+          exec nix --extra-experimental-features "nix-command flakes" run github:americanservices/factory_floor#opencode-dev -- "$@"
+        ' bash "$@"
       '';
       
       # Quick development secrets setup
