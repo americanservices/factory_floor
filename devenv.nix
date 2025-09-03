@@ -107,7 +107,7 @@ in
           # Top-level worktree
           WORKTREE_DIR="worktrees/$BRANCH"
           # Use current branch as base if no parent specified
-          BASE_BRANCH="''${PARENT:-$(git branch --show-current || echo master)}"
+          BASE_BRANCH="''${PARENT:-master}"
         fi
         
         # Check if worktree directory already exists
@@ -1145,30 +1145,16 @@ Automated commit from wt-ship-all command." || echo "    ⚠️  Could not commi
         CLEAN_TITLE=$(echo "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
         BRANCH="$PREFIX/$ISSUE-$CLEAN_TITLE"
         
-        # Check if worktree already exists and clean up if needed
+        # Check if worktree already exists, create only if needed
         WORKTREE_DIR="worktrees/$BRANCH"
         if [ -d "$WORKTREE_DIR" ]; then
-          echo "⚠️    Worktree already exists: $WORKTREE_DIR"
-          echo "🧹 Cleaning up existing worktree..."
-          
-          # Remove from git worktree list if it exists
-          if git worktree list | grep -q "$WORKTREE_DIR"; then
-            git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || true
-          fi
-          
-          # Remove directory if it still exists
-          rm -rf "$WORKTREE_DIR" 2>/dev/null || true
-          
-          # Remove branch if it exists
-          git branch -D "$BRANCH" 2>/dev/null || true
-          
-          # Remove git-town configuration for this branch
-          git config --unset "branch.$BRANCH.parent" 2>/dev/null || true
-          git config --unset "branch.$BRANCH.pushremote" 2>/dev/null || true
+          echo "✅ Worktree already exists: $WORKTREE_DIR"
+          # Ensure essential files are present in existing worktree
+          cp -n agent-compose.yml "$WORKTREE_DIR/" 2>/dev/null || true
+          cp -n CLAUDE.md "$WORKTREE_DIR/" 2>/dev/null || true
+        else
+          wt-new "$BRANCH"
         fi
-        
-        # Create worktree
-        wt-new "$BRANCH"
 
         
         # Save issue context
@@ -1188,64 +1174,53 @@ $(date)
 ## Branch
 $BRANCH
 EOF
-        # Start container with Claude
+        # Start container with Claude using docker-compose
         echo "🤖 Starting AI agent for issue #$ISSUE..."
         cd "worktrees/$BRANCH"
         
-        # Use Dagger for isolation if available, otherwise run locally
-        if command -v dagger &> /dev/null && command -v python3 &> /dev/null && python3 -c "import dagger" 2>/dev/null; then
-          echo "🐳 Running AI agent in Dagger container..."
+        # Use Docker Compose for isolation if available, otherwise run locally
+        if command -v docker-compose &> /dev/null || command -v docker &> /dev/null; then
+          echo "🐳 Running AI agent in Docker container..."
           
-          # Ensure Dagger engine is running
-          if ! dagger version &>/dev/null 2>&1; then
-            echo "Starting Dagger engine..."
-            dagger engine start || echo "Warning: Failed to start Dagger engine"
-          fi
+          # Set environment variables for docker-compose
+          export WORKTREE_PATH="$(pwd)"
+          export CONTEXT_PATH="$(pwd)/.context"
+          export ISSUE_NUMBER="$ISSUE"
+          export GITHUB_KEY="''${GITHUB_TOKEN:-}"
+          export ANTHROPIC_API_KEY="''${ANTHROPIC_API_KEY:-}"
+          export GIT_DIR="$(git rev-parse --git-dir)"
           
-          # Use the helper script if it exists, otherwise create inline script
-          if [ -f "run_dagger_agent.py" ]; then
-            python3 "run_dagger_agent.py" \
-              --source . \
-              --context .context \
-              --issue "$ISSUE"
+          # Create task file instead of env var (more reliable)
+          TASK_MSG="Read .context/issue-$ISSUE.md and implement the solution. Follow the team workflow in CLAUDE.md. Commit your changes with conventional commits referencing #$ISSUE."
+          echo "$TASK_MSG" > ./.context/task.txt
+          
+          # Debug: show what we're exporting
+          echo "🔍 HOST DEBUG - devenv.nix agent-start:"
+          echo "  WORKTREE_PATH: $WORKTREE_PATH"
+          echo "  ISSUE_NUMBER: $ISSUE_NUMBER"
+          echo "  GITHUB_TOKEN: ''${GITHUB_TOKEN:0:8}...''${GITHUB_TOKEN: -4}"
+          echo "  TASK saved to: .context/task.txt"
+          echo "📄 TASK CONTENT:"
+          cat ./.context/task.txt
+          echo ""
+          echo "📁 CONTEXT FILES:"
+          ls -la ./.context/
+          echo ""
+          
+          # Always use the fast compose file (working version)
+          cp ../../../agent-compose.yml ./agent-compose.yml
+          COMPOSE_FILE="$(pwd)/agent-compose.yml"
+          echo "🐳 Using compose file: $COMPOSE_FILE"
+          echo "📋 COMPOSE FILE CONTENT:"
+          echo "--------------------------------"
+          head -20 "$COMPOSE_FILE"
+          echo "--------------------------------"
+          
+          # Use docker compose to run the agent
+          if command -v docker &> /dev/null; then
+            docker compose -f "$COMPOSE_FILE" up --build ai-agent
           else
-            # Fallback to inline Python script
-            cat > /tmp/run-agent-$$.py << 'PYTHON_SCRIPT'
-import asyncio
-import dagger
-import os
-import sys
-
-async def main():
-    issue = sys.argv[1] if len(sys.argv) > 1 else "unknown"
-    
-    async with dagger.Connection() as client:
-        # Build container
-        container = (
-            client.container()
-            .from_("ubuntu:22.04")
-            .with_exec(["apt-get", "update"])
-            .with_exec(["apt-get", "install", "-y", "git", "curl", "nodejs", "npm"])
-            .with_mounted_directory("/workspace", client.host().directory("."))
-            .with_workdir("/workspace")
-        )
-        
-        # Add API key if available
-        if os.getenv("ANTHROPIC_API_KEY"):
-            container = container.with_env_variable("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY"))
-        
-        # Run command
-        result = await container.with_exec([
-            "bash", "-c", f"echo 'Working on issue #{issue}'"
-        ]).stdout()
-        print(result)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-PYTHON_SCRIPT
-            
-            python3 /tmp/run-agent-$$.py "$ISSUE"
-            rm -f /tmp/run-agent-$$.py
+            docker-compose -f "$COMPOSE_FILE" up --build ai-agent
           fi
         else
           # Fallback to local execution
@@ -1325,9 +1300,9 @@ PYTHON_SCRIPT
           } > .context/task.md
         fi
         
-        # Use Dagger for isolation if available, otherwise run locally
-        if command -v dagger &> /dev/null && command -v python3 &> /dev/null && python3 -c "import dagger" 2>/dev/null; then
-          echo "🐳 Running AI agent in Dagger container..."
+        # Use Docker Compose for isolation if available, otherwise run locally
+        if command -v docker-compose &> /dev/null || command -v docker &> /dev/null; then
+          echo "🐳 Running AI agent in Docker container..."
           
           # Ensure Dagger engine is running
           if ! dagger version &>/dev/null 2>&1; then
